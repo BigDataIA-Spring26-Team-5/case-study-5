@@ -11,14 +11,11 @@ from app.routers.companies import router as companies_router
 from app.core.exceptions import validation_exception_handler
 # from app.routers.industries import router as industries_router  # Not needed: CS4 doesn't use industry catalog
 from app.routers.health import router as health_router
-from app.routers.assessments import router as assessments_router
 from app.routers.dimensionScores import router as dimension_scores_router
 from app.routers.documents import router as documents_router
 from app.routers.signals import router as signals_router
 from app.routers.evidence import router as evidence_router
 from app.routers.scoring import router as scoring_router
-from app.routers.board_governance import router as board_governance_router
-from app.routers.glassdoor_signals import router as glassdoor_signals_router
 from app.routers.tc_vr_scoring import router as tc_vr_router
 from app.routers.position_factor import router as pf_router
 from app.routers.hr_scoring import router as hr_router
@@ -29,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.shutdown import set_shutdown, is_shutting_down
 
 
-# SWAGGER UI — tag display order (CS1 → CS2 → CS3)
+# SWAGGER UI — tag display order
 _OPENAPI_TAGS = [
     # ── Infrastructure ────────────────────────────────────────────
     {"name": "Root"},
@@ -70,62 +67,22 @@ _OPENAPI_TAGS = [
         ),
     },
     {
-        "name": "5. Management",
-        "description": (
-            "**CS2 — Document Management & Reports**  \n"
-            "List, inspect, and report on collected/parsed/chunked documents."
-        ),
-    },
-    {
-        "name": "6. Reset (Demo)",
-        "description": (
-            "**CS2 — Reset (Demo Only)**  \n"
-            "Delete all S3 and Snowflake data for a company. For testing only."
-        ),
-    },
-    {
         "name": "Signals",
         "description": (
             "**CS2 — Signal Scoring (4 Evidence Signals)**  \n"
             "Score per company: `technology_hiring` (JobSpy), `digital_presence` (BuiltWith+Wappalyzer), "
-            "`innovation_activity` (PatentsView/USPTO), `leadership_signals` (SEC DEF-14A).  \n"
-            "Also: `GET /{ticker}/current-scores` to read latest scores without re-running."
-        ),
-    },
-    {
-        "name": "Glassdoor Culture Signals",
-        "description": (
-            "**CS2 — Culture Signal Collection**  \n"
-            "Scrape Glassdoor/Indeed/CareerBliss → CultureSignal (innovation, data-driven, "
-            "AI awareness, change readiness) → S3 + Snowflake. Works for any registered ticker."
-        ),
-    },
-    {
-        "name": "Board Governance",
-        "description": (
-            "**CS2 — Board Governance Signal**  \n"
-            "Parse DEF 14A proxy → board composition, tech committee, AI expertise, "
-            "independent director ratio → governance score. Dynamic CIK lookup for any SEC ticker."
+            "`innovation_activity` (PatentsView/USPTO), `leadership_signals` (SEC DEF-14A)."
         ),
     },
     {
         "name": "Evidence",
         "description": (
-            "**CS2 — Evidence Summary & Backfill**  \n"
-            "Aggregate evidence stats across all companies; trigger full evidence backfill "
-            "(SEC docs + 4 signals) for the entire portfolio."
+            "**CS2 — Evidence Summary**  \n"
+            "Aggregate evidence stats across all companies."
         ),
     },
 
     # ── CS3 — Scoring & Assessments ───────────────────────────────
-    {
-        "name": "Assessments",
-        "description": (
-            "**CS3 — Assessment CRUD**  \n"
-            "Create and manage IC assessments. "
-            "Status: `draft` → `in_progress` → `submitted` → `approved` → `superseded`."
-        ),
-    },
     {
         "name": "Dimension Scores",
         "description": (
@@ -187,12 +144,8 @@ app.include_router(documents_router)         # collect / parse / chunk / report
 app.include_router(signals_router)           # job / tech / patent / leadership signals
 app.include_router(evidence_router)          # aggregated evidence stats per ticker
 # CS3 — Scoring & assessments
-app.include_router(assessments_router)       # full company assessment
 app.include_router(dimension_scores_router)  # per-dimension scores + confidence intervals
 app.include_router(scoring_router)           # dimension scoring computation + rubrics
-
-app.include_router(board_governance_router)  # board composition + governance scoring
-app.include_router(glassdoor_signals_router) # culture signal collection + scoring
 
 from app.routers.rag import router as rag_router
 app.include_router(rag_router)

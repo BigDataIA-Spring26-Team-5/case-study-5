@@ -2,27 +2,19 @@
 routers/orgair_scoring.py — CS3 Task 6.4 Endpoints
 
 Endpoints:
-  POST /api/v1/scoring/orgair/{ticker}        — Compute Org-AI-R for one company
-  POST /api/v1/scoring/orgair/portfolio       — Compute Org-AI-R for all 5 CS3 companies
   POST /api/v1/scoring/orgair/results         — Generate results/*.json for submission
-  GET  /api/v1/scoring/orgair/portfolio       — Read portfolio from Snowflake
-  GET  /api/v1/scoring/orgair/{ticker}        — Read one from Snowflake
+  POST /api/v1/scoring/orgair/portfolio       — Compute Org-AI-R for all 5 CS3 companies
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from typing import List, Dict, Any
 import logging
 import time
 
-from app.repositories.composite_scoring_repository import get_composite_scoring_repo
 from app.services.composite_scoring_service import (
     get_composite_scoring_service,
     OrgAIRResponse,
-    OrgAIRBreakdown,
-    OrgAIRValidation,
-    CIBreakdown,
     CS3_PORTFOLIO,
 )
 
@@ -32,7 +24,7 @@ router = APIRouter(prefix="/api/v1/scoring", tags=["CS3 Org-AI-R"])
 
 
 # =====================================================================
-# Response Models (portfolio + GET — stay in router)
+# Response Models
 # =====================================================================
 
 class PortfolioOrgAIRResponse(BaseModel):
@@ -121,15 +113,15 @@ async def score_portfolio_orgair():
     logger.info("=" * 70)
     logger.info(
         f"{'Ticker':<8} {'V^R':>8} {'H^R':>8} {'Synergy':>9} "
-        f"{'Org-AI-R':>10} {'Range':>15} {'✓':>3}"
+        f"{'Org-AI-R':>10} {'Range':>15} {'OK':>3}"
     )
     logger.info("-" * 70)
 
     for r in results:
         if r.status == "success" and r.breakdown:
             b = r.breakdown
-            val_status = r.validation.status if r.validation else "—"
-            range_str = r.validation.orgair_expected if r.validation else "—"
+            val_status = r.validation.status if r.validation else "-"
+            range_str = r.validation.orgair_expected if r.validation else "-"
             logger.info(
                 f"{r.ticker:<8} {b.vr_score:>8.2f} {b.hr_score:>8.2f} "
                 f"{b.synergy_score:>9.2f} {b.org_air_score:>10.2f} "
@@ -167,84 +159,3 @@ async def score_portfolio_orgair():
         summary_table=summary,
         duration_seconds=round(time.time() - start, 2),
     )
-
-
-# =====================================================================
-# POST /api/v1/scoring/orgair/{ticker}
-# =====================================================================
-
-@router.post(
-    "/orgair/{ticker}",
-    response_model=OrgAIRResponse,
-    summary="Calculate Org-AI-R for one company",
-)
-async def score_orgair(ticker: str):
-    """Calculate Org-AI-R for one company."""
-    return get_composite_scoring_service().compute_orgair(ticker.upper())
-
-
-# =====================================================================
-# GET endpoints (Snowflake reads)
-# =====================================================================
-
-class OrgAIRScoringRecord(BaseModel):
-    ticker: str
-    org_air: Optional[float] = None
-    scored_at: Optional[str] = None
-    updated_at: Optional[str] = None
-
-
-class PortfolioOrgAIRScoringResponse(BaseModel):
-    status: str
-    results: List[OrgAIRScoringRecord]
-    message: Optional[str] = None
-
-
-def _fetch_orgair_row(ticker: str) -> Optional[OrgAIRScoringRecord]:
-    row = get_composite_scoring_repo().fetch_orgair_row(ticker)
-    if not row:
-        return None
-    return OrgAIRScoringRecord(
-        ticker=row["TICKER"],
-        org_air=row.get("ORG_AIR"),
-        scored_at=str(row["SCORED_AT"]) if row.get("SCORED_AT") else None,
-        updated_at=str(row["UPDATED_AT"]) if row.get("UPDATED_AT") else None,
-    )
-
-
-@router.get(
-    "/orgair/portfolio",
-    response_model=PortfolioOrgAIRScoringResponse,
-    summary="Get last computed Org-AI-R for all 5 CS3 companies (from Snowflake)",
-)
-async def get_portfolio_orgair():
-    results = []
-    for ticker in CS3_PORTFOLIO:
-        try:
-            row = _fetch_orgair_row(ticker)
-            results.append(row if row else OrgAIRScoringRecord(ticker=ticker))
-        except Exception as e:
-            logger.warning(f"[{ticker}] Failed to fetch SCORING row: {e}")
-            results.append(OrgAIRScoringRecord(ticker=ticker))
-
-    scored = sum(1 for r in results if r.org_air is not None)
-    return PortfolioOrgAIRScoringResponse(
-        status="ok",
-        results=results,
-        message=f"{scored}/{len(CS3_PORTFOLIO)} companies have stored Org-AI-R scores",
-    )
-
-
-@router.get(
-    "/orgair/{ticker}",
-    response_model=OrgAIRScoringRecord,
-    summary="Get last computed Org-AI-R for one company (from Snowflake)",
-)
-async def get_orgair(ticker: str):
-    row = _fetch_orgair_row(ticker.upper())
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No scoring record for {ticker.upper()}. Run POST first.",
-        )
-    return row
