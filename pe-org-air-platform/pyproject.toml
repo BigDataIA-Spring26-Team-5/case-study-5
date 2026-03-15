@@ -39,7 +39,8 @@ dependencies = [
     "onnxruntime (==1.16.3)",
     "litellm (>=1.82.1,<2.0.0)",
     "snowflake-sqlalchemy (>=1.9.0,<2.0.0)",
-    "python-jobspy (==1.1.82)"
+    "python-jobspy (==1.1.82)",
+    "pip (>=26.0.1,<27.0.0)"
 ]
 
 [tool.poetry]
