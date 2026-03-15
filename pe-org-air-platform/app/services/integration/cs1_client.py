@@ -52,18 +52,7 @@
 #         companies = data if isinstance(data, list) else data.get("companies", [])
 #         return [self._parse_company(c) for c in companies]
 
-#     def get_portfolio_companies(self, portfolio_id: str) -> List[Company]:
-#         """Get companies belonging to a specific portfolio."""
-#         resp = self._client.get(
-#             f"{self.base_url}/companies",
-#             params={"portfolio_id": portfolio_id},
-#         )
-#         resp.raise_for_status()
-#         data = resp.json()
-#         companies = data if isinstance(data, list) else data.get("companies", [])
-#         return [self._parse_company(c) for c in companies]
-
-#     @staticmethod
+#  @staticmethod
 #     def _parse_company(data: dict) -> Company:
 #         return Company(
 #             company_id=str(data.get("id", data.get("company_id", ""))),
@@ -154,17 +143,6 @@ class CS1Client:
         if min_revenue is not None:
             params["min_revenue"] = min_revenue
         resp = await self._client.get(f"{self.base_url}/companies", params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        companies = data if isinstance(data, list) else data.get("companies", [])
-        return [self._parse_company(c) for c in companies]
-
-    async def get_portfolio_companies(self, portfolio_id: str) -> List[Company]:
-        """Get companies filtered by portfolio_id via the companies list endpoint."""
-        resp = await self._client.get(
-            f"{self.base_url}/companies",
-            params={"portfolio_id": portfolio_id},
-        )
         resp.raise_for_status()
         data = resp.json()
         companies = data if isinstance(data, list) else data.get("companies", [])

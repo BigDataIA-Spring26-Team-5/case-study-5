@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Dict, Optional
+from typing import Dict
 from datetime import datetime, timezone
 import os
 

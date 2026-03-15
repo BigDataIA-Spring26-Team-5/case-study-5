@@ -7,9 +7,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.services.integration.cs1_client import CS1Client
 from app.services.integration.cs2_client import CS2Client
-from app.services.integration.cs3_client import CS3Client
 from app.services.search.vector_store import VectorStore, EMBEDDING_MODEL
 from app.services.retrieval.hybrid import HybridRetriever
 from app.services.retrieval.dimension_mapper import DimensionMapper
