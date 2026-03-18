@@ -1,7 +1,4 @@
-import signal
-import asyncio
 import logging
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -28,7 +25,7 @@ from app.routers.orgair_scoring import router as orgair_router
 from app.routers.analyst_notes import router as analyst_notes_router
 
 from app.core.exceptions import validation_exception_handler
-from app.shutdown import set_shutdown
+from app.core.lifespan import lifespan
 
 logger = logging.getLogger(__name__)
 
@@ -120,45 +117,6 @@ _OPENAPI_TAGS = [
         ),
     },
 ]
-
-
-# LIFESPAN — replaces deprecated @app.on_event("startup"/"shutdown")
-def _register_windows_signal_handlers():
-    original_sigint = signal.getsignal(signal.SIGINT)
-
-    def _windows_handler(signum, frame):
-        print("\nReceived Ctrl+C — shutting down gracefully...")
-        set_shutdown()
-        if callable(original_sigint):
-            original_sigint(signum, frame)
-
-    signal.signal(signal.SIGINT, _windows_handler)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    print("Starting PE Org-AI-R Platform Foundation API...")
-    print("Swagger UI available at: http://localhost:8000/docs")
-
-    loop = asyncio.get_running_loop()
-
-    def _signal_handler(sig):
-        print(f"\nReceived {sig.name} — shutting down gracefully...")
-        set_shutdown()
-
-    try:
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, _signal_handler, sig)
-    except NotImplementedError:
-        print("Signal handlers not supported on Windows, using fallback...")
-        _register_windows_signal_handlers()
-
-    yield
-
-    # Shutdown
-    print("Shutting down PE Org-AI-R Platform Foundation API...")
-    set_shutdown()
 
 
 # FASTAPI APPLICATION CONFIGURATION
