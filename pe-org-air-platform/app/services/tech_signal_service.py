@@ -74,7 +74,6 @@ Return ONLY a JSON array of subdomain names (no protocol, no domain):
 Be specific to this company's likely digital infrastructure needs."""
 
         try:
-            # FIX BUG 1: properly await the async complete() call
             response = await self.llm_router.complete(
                 task="subdomain_suggestion",
                 messages=[{"role": "user", "content": prompt}],
@@ -137,12 +136,6 @@ Be specific to this company's likely digital infrastructure needs."""
             website=website
         )
 
-        # FIX BUG 2: Don't pass subdomains= kwarg to analyze_company
-        # TechStackCollector.analyze_company() doesn't accept that parameter.
-        # Instead, pass subdomains info via the collector's own mechanism if available,
-        # or let it handle domain scanning on its own.
-        #
-        # Check if the collector's analyze_company accepts subdomains
         import inspect
         sig = inspect.signature(self.collector.analyze_company)
         collector_kwargs = {

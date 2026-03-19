@@ -467,26 +467,6 @@ class WappalyzerClient:
 # Groq LLM Fallback (last resort only)
 # ---------------------------------------------------------------------------
 
-# ===========================================================================
-# TODO: SWITCH TO CLAUDE — when ready, do these 3 things:
-#
-#   1. In this file (tech_signals.py):
-#      - Comment out _groq_tech_stack_score() below
-#      - Uncomment _claude_tech_stack_score() below it
-#      - In analyze_company(), swap the one call from:
-#            _groq_tech_stack_score(ticker, company_name or ticker, domain)
-#        to:
-#            _claude_tech_stack_score(ticker, company_name or ticker, domain)
-#
-#   2. In app/services/llm/router.py:
-#      - Uncomment "tech_stack_fallback" entry in _TASK_ROUTING (already added there)
-#      - Uncomment "claude-sonnet-4-20250514" in _MODEL_CONFIGS
-#      - Uncomment "claude-sonnet-4-20250514" in _MODEL_COST_PER_1K
-#      - Comment out the TESTING _TASK_ROUTING block, uncomment PRODUCTION block
-#
-#   3. In .env:
-#      - Add: ANTHROPIC_API_KEY=sk-ant-...
-#
 #   That's it. Everything else (scoring, S3 storage, result parsing) stays identical.
 # ===========================================================================
 
@@ -584,15 +564,6 @@ Scoring guidance:
     except Exception as e:
         logger.error(f"Groq LLM fallback failed for {ticker}: {e}")
         return None
-
-
-# def _claude_tech_stack_score(ticker: str, company_name: str, domain: str) -> Optional[Dict[str, Any]]:
-#     """
-#     [PRODUCTION] Use Claude Sonnet via ModelRouter — uncomment when switching.
-#     See TODO block above for full checklist.
-#     """
-#     from app.services.llm.router import ModelRouter
-#     ...
 
 
 # ---------------------------------------------------------------------------

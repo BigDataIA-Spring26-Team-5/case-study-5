@@ -34,12 +34,6 @@ from app.config import (
 
 
 from app.models.signal import JobPosting
-# from app.pipelines.keywords import (
-#     AI_KEYWORDS,
-#     AI_SKILLS,
-#     AI_TECHSTACK_KEYWORDS,
-#     TECH_JOB_TITLE_KEYWORDS,
-# )
 
 from app.pipelines.keywords import (
     AI_KEYWORDS,

@@ -1242,7 +1242,6 @@ class BoardCompositionAnalyzer:
             """Clear extraction context after analysis."""
             self._extraction_context = None
 
-    # def analyze_board(self, company_id: str, ticker: str, members: List[BoardMember], committees: List[str], strategy_text: str = "") -> GovernanceSignal:
     def analyze_board(self, company_id: str, ticker: str, members: List[BoardMember], committees: List[str], strategy_text: str = "", full_proxy_text: str = "") -> GovernanceSignal:
         score = D("20")
         relevant_comms: List[str] = []
@@ -1265,16 +1264,6 @@ class BoardCompositionAnalyzer:
             score += D("20")
         trail["ai_expertise"] = {"points": 20 if has_ai else 0, "max_points": 20, "triggered": has_ai, "expert_count": len(ai_experts)}
 
-        # has_officer = False
-        # for m in members:
-        #     combined = (m.title + " " + m.bio).lower()
-        #     if any(dt in combined for dt in self.DATA_OFFICER_TITLES):
-        #         if any(w in combined for w in ["chief", "officer", "vp", "svp", "head", "president"]):
-        #             has_officer = True
-        #             break
-        # if has_officer:
-        #     score += D("15")
-
         has_officer = False
         for m in members:
             combined = (m.title + " " + m.bio).lower()
@@ -1282,17 +1271,6 @@ class BoardCompositionAnalyzer:
                 if any(w in combined for w in ["chief", "officer", "vp", "svp", "head", "president"]):
                     has_officer = True
                     break
-        # # Also search proxy/strategy text for exec officer titles
-        # # (CTO, CDO etc. are executive officers, not always board members)
-        # if not has_officer and strategy_text:
-        #     proxy_lower = strategy_text.lower()
-        #     for dt in self.DATA_OFFICER_TITLES:
-        #         if dt in proxy_lower:
-        #             idx = proxy_lower.find(dt)
-        #             context = proxy_lower[max(0, idx - 60):idx + 80]
-        #             if "former" not in context and "retired" not in context and "prior" not in context:
-        #                 has_officer = True
-        #                 break
         # Also search full proxy text for exec officer titles
         # (CTO, CDO etc. are executive officers, not always board members)
         search_text = full_proxy_text or strategy_text
@@ -1351,8 +1329,6 @@ class BoardCompositionAnalyzer:
             "independent_count": llm_context.get("independent_count", len(indep_names)) if llm_context else len(indep_names),
             "total_directors": llm_context.get("board_size", len(members)) if llm_context else len(members),
         }
-        # trail["independent_ratio"] = {"points": 10 if ratio_pass else 0, "max_points": 10, "triggered": ratio_pass, "ratio": float(indep_ratio), "independent_count": len(indep_names), "total_directors": len(members)}
-
         has_risk_tech = False
         for c in committees:
             cl = c.lower()
@@ -1376,11 +1352,6 @@ class BoardCompositionAnalyzer:
             score += D("10")
         trail["risk_tech_oversight"] = {"points": 10 if has_risk_tech else 0, "max_points": 10, "triggered": has_risk_tech}
 
-        # has_ai_strat = False
-        # strat_matches = []
-        # if strategy_text:
-        #     strat_matches = [kw for kw in self.AI_STRATEGY_KEYWORDS if kw in strategy_text.lower()]
-        #     has_ai_strat = len(strat_matches) > 0
         has_ai_strat = False
         strat_matches = []
         ai_search_text = full_proxy_text or strategy_text
@@ -1460,10 +1431,10 @@ def _signal_to_dict(signal: GovernanceSignal) -> dict:
 
 def print_signal(signal: GovernanceSignal):
     info = CompanyRegistry.get(signal.ticker)
-    print(f"\n{'=' * 60}")
-    print(f"  BOARD GOVERNANCE - {signal.ticker} ({info['name']})")
-    print(f"{'=' * 60}")
-    print(f"  Score: {signal.governance_score}/100  Confidence: {signal.confidence}")
+    logger.info("=" * 60)
+    logger.info("  BOARD GOVERNANCE - %s (%s)", signal.ticker, info['name'])
+    logger.info("=" * 60)
+    logger.info("  Score: %s/100  Confidence: %s", signal.governance_score, signal.confidence)
 
 def save_signal(signal: GovernanceSignal, out_dir: str = "results") -> Path:
     d = Path(out_dir)
@@ -1491,10 +1462,10 @@ def save_signal_to_s3(signal: GovernanceSignal, evidence_trail: Optional[Dict[st
 def print_summary_table(results: Dict[str, GovernanceSignal]):
     if not results:
         return
-    print(f"\n{'=' * 60}")
+    logger.info("=" * 60)
     for t, s in sorted(results.items(), key=lambda x: x[1].governance_score, reverse=True):
-        print(f"  {t:<8} {s.governance_score:>5}  {float(s.independent_ratio)*100:>5.1f}%  {s.tech_expertise_count:>5}   {s.confidence:>5}")
-    print(f"{'=' * 60}")
+        logger.info("  %-8s %5s  %5.1f%%  %5s   %5s", t, s.governance_score, float(s.independent_ratio)*100, s.tech_expertise_count, s.confidence)
+    logger.info("=" * 60)
 
 # ── CLI ──────────────────────────────────────────────────────
 
