@@ -56,7 +56,13 @@ class DocumentCollectorService:
         company_id = str(company['id'])
         company_name = company['name']
         logger.info(f"✅ Found company: {company_name} (ID: {company_id})")
-        
+
+        # Verify CIK is resolvable before starting collection
+        cik = self.sec_collector.get_cik(ticker)
+        if not cik:
+            logger.error(f"❌ Could not resolve CIK for ticker: {ticker}")
+            raise NotFoundError("cik", ticker)
+
         # Track results
         documents_found = 0
         documents_uploaded = 0

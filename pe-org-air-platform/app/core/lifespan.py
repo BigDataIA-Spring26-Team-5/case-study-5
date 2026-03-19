@@ -95,6 +95,8 @@ def _create_singletons(app: FastAPI) -> None:
     from app.services.patent_signal_service import PatentSignalService
     from app.services.tech_signal_service import TechSignalService
     from app.services.leadership_service import LeadershipSignalService
+    from app.services.board_composition_service import BoardCompositionService
+    from app.services.culture_signal_service import CultureSignalService
 
     app.state.composite_scoring_service = CompositeScoringService()
     app.state.document_collector_service = DocumentCollectorService()
@@ -105,6 +107,8 @@ def _create_singletons(app: FastAPI) -> None:
     app.state.patent_signal_service = PatentSignalService()
     app.state.tech_signal_service = TechSignalService()
     app.state.leadership_service = LeadershipSignalService()
+    app.state.board_composition_service = BoardCompositionService()
+    app.state.culture_signal_service = CultureSignalService()
 
     # ── 6. Task Store (Redis-backed) ────────────────────────────────────
     from app.services.task_store import TaskStore

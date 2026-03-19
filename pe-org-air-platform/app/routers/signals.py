@@ -26,6 +26,8 @@ from app.core.dependencies import (
     get_patent_signal_service,
     get_tech_signal_service,
     get_leadership_service,
+    get_board_composition_service,
+    get_culture_signal_service_dep,
     get_task_store,
 )
 from app.core.errors import NotFoundError
@@ -42,6 +44,8 @@ VALID_CATEGORIES = [
     "innovation_activity",
     "digital_presence",
     "leadership_signals",
+    "board_composition",
+    "culture",
 ]
 
 
@@ -78,7 +82,7 @@ router = APIRouter(prefix="/api/v1", tags=["Signals"])
     summary="Trigger signal collection for a company",
     description=(
         "Trigger signal collection for a company. Runs asynchronously in the background.\n\n"
-        "**Categories:** technology_hiring, innovation_activity, digital_presence, leadership_signals\n\n"
+        "**Categories:** technology_hiring, innovation_activity, digital_presence, leadership_signals, board_composition, culture\n\n"
         "Returns a task_id to check status via GET /api/v1/signals/tasks/{task_id}"
     ),
 )
@@ -91,6 +95,8 @@ async def collect_signals(
     patent_signal_svc=Depends(get_patent_signal_service),
     tech_signal_svc=Depends(get_tech_signal_service),
     leadership_svc=Depends(get_leadership_service),
+    board_composition_svc=Depends(get_board_composition_service),
+    culture_svc=Depends(get_culture_signal_service_dep),
 ):
     """Trigger signal collection for a company."""
     task_id = str(uuid4())
@@ -115,6 +121,8 @@ async def collect_signals(
         patent_signal_svc=patent_signal_svc,
         tech_signal_svc=tech_signal_svc,
         leadership_svc=leadership_svc,
+        board_composition_svc=board_composition_svc,
+        culture_svc=culture_svc,
     )
 
     logger.info(f"Signal collection queued: task_id={task_id}, company={request.company_id}")
@@ -137,6 +145,8 @@ async def run_signal_collection(
     patent_signal_svc,
     tech_signal_svc,
     leadership_svc,
+    board_composition_svc=None,
+    culture_svc=None,
 ):
     """Background task for signal collection."""
     logger.info(f"Starting signal collection: task_id={task_id}, company={company_id}")
@@ -170,6 +180,8 @@ async def run_signal_collection(
         "innovation_activity": (patent_signal_svc, {"years_back": years_back}),
         "digital_presence": (tech_signal_svc, {"force_refresh": force_refresh}),
         "leadership_signals": (leadership_svc, {}),
+        "board_composition": (board_composition_svc, {}),
+        "culture": (culture_svc, {"force_refresh": force_refresh}),
     }
 
     for i, category in enumerate(categories):

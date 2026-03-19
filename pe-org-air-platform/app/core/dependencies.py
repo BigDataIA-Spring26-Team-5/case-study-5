@@ -104,6 +104,14 @@ def get_leadership_service(request: Request):
     return request.app.state.leadership_service
 
 
+def get_board_composition_service(request: Request):
+    return request.app.state.board_composition_service
+
+
+def get_culture_signal_service_dep(request: Request):
+    return request.app.state.culture_signal_service
+
+
 def get_cs2_client(request: Request):
     return request.app.state.cs2_client
 
