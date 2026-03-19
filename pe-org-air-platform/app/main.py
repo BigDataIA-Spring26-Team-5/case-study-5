@@ -26,6 +26,7 @@ from app.routers.orgair_scoring import assessment_router
 from app.routers.analyst_notes import router as analyst_notes_router
 
 from app.core.exceptions import validation_exception_handler
+from app.core.errors import PlatformError, ERROR_STATUS_MAP
 from app.core.lifespan import lifespan
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,21 @@ app.add_middleware(
 
 # REGISTER EXCEPTION HANDLERS
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+
+
+@app.exception_handler(PlatformError)
+async def platform_error_handler(request: Request, exc: PlatformError):
+    """Translate PlatformError subclasses to structured JSON responses."""
+    status_code = ERROR_STATUS_MAP.get(type(exc), 500)
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "details": exc.details,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 @app.exception_handler(Exception)

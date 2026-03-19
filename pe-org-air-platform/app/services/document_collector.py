@@ -13,6 +13,7 @@ from app.models.document import (
     DocumentStatus
 )
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError
 
 # Configure logging to show in terminal
 logging.basicConfig(
@@ -50,7 +51,7 @@ class DocumentCollectorService:
         company = self.company_repo.get_by_ticker(ticker)
         if not company:
             logger.error(f"❌ Company not found for ticker: {ticker}")
-            raise ValueError(f"Company not found for ticker: {ticker}")
+            raise NotFoundError("company", ticker)
         
         company_id = str(company['id'])
         company_name = company['name']

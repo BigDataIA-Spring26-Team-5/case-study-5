@@ -22,6 +22,7 @@ from app.pipelines.job_signals import (
     step4_score_job_market,
 )
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError, ValidationError
 from app.pipelines.signal_pipeline_state import SignalPipelineState
 from app.services.s3_storage import get_s3_service
 from app.repositories.company_repository import CompanyRepository
@@ -87,7 +88,7 @@ class JobDataService:
 
         company = self.company_repo.get_by_ticker(ticker)
         if not company:
-            raise ValueError(f"Company not found: {ticker}")
+            raise NotFoundError("company", ticker)
 
         company_id = str(company["id"])
         company_name = company["name"]
@@ -167,7 +168,7 @@ class JobDataService:
           - company_id, ticker
         """
         if not job_data or "job_postings" not in job_data:
-            raise ValueError("Invalid job data")
+            raise ValidationError("Invalid job data")
 
         state = SignalPipelineState(
             companies=job_data.get("pipeline_state", {}).get("companies", []),

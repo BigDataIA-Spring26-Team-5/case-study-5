@@ -6,6 +6,7 @@ from app.pipelines.document_parser import get_document_parser, ParsedDocument
 from app.services.s3_storage import get_s3_service
 from app.repositories.document_repository import get_document_repository
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError, ExternalServiceError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +40,7 @@ class DocumentParsingService:
         # Get document metadata from Snowflake
         doc = self.doc_repo.get_by_id(document_id)
         if not doc:
-            raise ValueError(f"Document not found: {document_id}")
+            raise NotFoundError("document", document_id)
         
         ticker = doc['ticker']
         filing_type = doc['filing_type']
@@ -52,7 +53,7 @@ class DocumentParsingService:
         logger.info(f"  ⬇️  Downloading from S3: {s3_key}")
         content = self.s3_service.get_file(s3_key)
         if not content:
-            raise ValueError(f"Could not download file from S3: {s3_key}")
+            raise ExternalServiceError("s3", f"Could not download file from S3: {s3_key}")
         
         logger.info(f"  ✅ Downloaded {len(content):,} bytes")
         

@@ -29,6 +29,7 @@ from app.repositories.signal_repository import get_signal_repository
 from app.repositories.chunk_repository import get_chunk_repository
 from app.repositories.company_repository import CompanyRepository
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class ScoringService:
 
         company = self.company_repo.get_by_ticker(ticker)
         if not company:
-            raise ValueError(f"Company not found for ticker: {ticker}")
+            raise NotFoundError("company", ticker)
         company_id = str(company["id"])
 
         # Step 1: CS2 signals

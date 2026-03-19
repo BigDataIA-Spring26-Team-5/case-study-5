@@ -1,5 +1,6 @@
 # app/services/leadership_service.py
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError
 """
 Leadership Signal Service — DEF 14A Analysis Orchestrator
 
@@ -64,7 +65,7 @@ class LeadershipSignalService:
         # ── Resolve company ──
         company = self.company_repo.get_by_ticker(ticker)
         if not company:
-            raise ValueError(f"Company not found: {ticker}")
+            raise NotFoundError("company", ticker)
 
         company_id = str(company["id"])
         company_name = company["name"]
@@ -79,7 +80,7 @@ class LeadershipSignalService:
 
         if not def14a_docs:
             logger.warning(f"❌ No DEF 14A filings found for: {ticker}")
-            raise ValueError(f"No DEF 14A filings found for: {ticker}")
+            raise NotFoundError("def_14a_filings", ticker)
 
         # FIX #1: Sort by filing_date ascending so recency weights work
         def14a_docs = sorted(
@@ -183,9 +184,7 @@ class LeadershipSignalService:
                 continue
 
         if not all_scores:
-            raise ValueError(
-                f"Could not analyze any DEF 14A filings for: {ticker}"
-            )
+            raise NotFoundError("def_14a_analysis", ticker)
 
         # ──────────────────────────────────────────────────────────
         # Aggregate across filings with recency weighting

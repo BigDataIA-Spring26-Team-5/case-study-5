@@ -8,6 +8,8 @@ Abstract base class for the 5-step signal orchestration pattern:
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
+from app.core.errors import NotFoundError
+
 
 class BaseSignalService(ABC):
     """Shared orchestration: delete old → collect → persist → return result dict."""
@@ -50,7 +52,7 @@ class BaseSignalService(ABC):
 
         company = self.company_repo.get_by_ticker(ticker)
         if not company:
-            raise ValueError(f"Company not found: {ticker}")
+            raise NotFoundError("company", ticker)
 
         company_id = str(company["id"])
 
