@@ -8,6 +8,7 @@ from app.services.s3_storage import get_s3_service
 from app.repositories.document_repository import get_document_repository
 from app.repositories.chunk_repository import get_chunk_repository
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,7 +48,7 @@ class DocumentChunkingService:
         # Get document metadata
         doc = self.doc_repo.get_by_id(document_id)
         if not doc:
-            raise ValueError(f"Document not found: {document_id}")
+            raise NotFoundError("document", document_id)
         
         ticker = doc['ticker']
         filing_type = doc['filing_type']
@@ -67,7 +68,7 @@ class DocumentChunkingService:
         
         parsed_content = self.s3_service.get_file(parsed_s3_key)
         if not parsed_content:
-            raise ValueError(f"Parsed content not found: {parsed_s3_key}")
+            raise NotFoundError("parsed_content", parsed_s3_key)
         
         parsed_data = json.loads(parsed_content.decode('utf-8'))
         text_content = parsed_data.get('text_content', '')
@@ -141,7 +142,7 @@ class DocumentChunkingService:
         
         if not parsed_docs:
             logger.warning(f"❌ No parsed documents found for: {ticker}")
-            raise ValueError(f"No parsed documents found for: {ticker}")
+            raise NotFoundError("parsed_documents", ticker)
         
         logger.info(f"📚 Found {len(parsed_docs)} parsed documents to chunk")
         

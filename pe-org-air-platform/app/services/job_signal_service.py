@@ -21,6 +21,7 @@ from app.services.s3_storage import get_s3_service
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.signal_repository import get_signal_repository
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,7 +48,7 @@ class JobSignalService(BaseSignalService):
         logger.info("📊 Getting job data for analysis...")
         job_data = await self.job_data_service.collect_job_data(ticker, force_refresh=force_refresh)
         if not job_data or "job_postings" not in job_data:
-            raise ValueError(f"No job data available for {ticker}")
+            raise NotFoundError("job_data", ticker)
 
         logger.info("📈 Analyzing job market...")
         analysis_result = self.job_data_service.analyze_job_market(job_data)

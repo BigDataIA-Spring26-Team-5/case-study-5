@@ -20,6 +20,8 @@ from typing import AsyncIterator, List, Dict, Any, Optional
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
+from app.core.errors import ExternalServiceError
+
 try:
     import litellm
     _LITELLM_AVAILABLE = True
@@ -134,7 +136,7 @@ class ModelRouter:
     ) -> str:
         """Async completion. Tries primary model, then fallback."""
         if self.budget.is_over_limit():
-            raise RuntimeError(f"Daily budget of ${self.budget.limit_usd} exceeded (spent ${self.budget.spend:.4f}).")
+            raise ExternalServiceError("llm_router", f"Daily budget of ${self.budget.limit_usd} exceeded (spent ${self.budget.spend:.4f}).")
 
         primary, fallback = _TASK_ROUTING.get(
             task, ("groq/llama-3.1-8b-instant", "deepseek/deepseek-chat")
@@ -166,7 +168,7 @@ class ModelRouter:
                 last_exc = exc
                 continue
 
-        raise RuntimeError(f"Both models failed for task '{task}': {last_exc}")
+        raise ExternalServiceError("llm_router", f"Both models failed for task '{task}': {last_exc}")
 
     async def _call_model(
         self,

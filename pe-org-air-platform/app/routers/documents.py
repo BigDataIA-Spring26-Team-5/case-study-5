@@ -13,7 +13,7 @@ from app.core.dependencies import (
     get_document_parsing_service,
     get_document_chunking_service,
 )
-from app.core.exceptions import raise_error
+from app.core.errors import PlatformError, ExternalServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +51,11 @@ async def collect_documents(
     logger.info(f"Collection request for: {request.ticker}")
     try:
         return service.collect_for_company(request)
-    except ValueError as e:
-        raise_error(404, "NOT_FOUND", str(e))
+    except PlatformError:
+        raise
     except Exception as e:
         logger.error(f"Collection failed: {e}")
-        raise_error(500, "COLLECTION_FAILED", "Failed to collect SEC filings.")
+        raise ExternalServiceError("document_collection", "Failed to collect SEC filings.")
 
 
 @router.post(
@@ -77,7 +77,7 @@ async def collect_all_documents(
         return service.collect_for_all_companies([ft.value for ft in filing_types], years_back)
     except Exception as e:
         logger.error(f"Batch collection failed: {e}")
-        raise_error(500, "COLLECTION_FAILED", "Failed to collect SEC filings for all companies.")
+        raise ExternalServiceError("document_collection", "Failed to collect SEC filings for all companies.")
 
 
 
@@ -108,11 +108,11 @@ async def parse_documents_by_ticker(
     logger.info(f"Parse request for: {ticker}")
     try:
         return service.parse_by_ticker(ticker)
-    except ValueError as e:
-        raise_error(404, "NOT_FOUND", str(e))
+    except PlatformError:
+        raise
     except Exception as e:
         logger.error(f"Parse failed for {ticker}: {e}")
-        raise_error(500, "PARSE_FAILED", "Failed to parse documents.")
+        raise ExternalServiceError("document_parsing", "Failed to parse documents.")
 
 
 @router.post(
@@ -130,7 +130,7 @@ async def parse_all_documents(
         return service.parse_all_companies()
     except Exception as e:
         logger.error(f"Batch parsing failed: {e}")
-        raise_error(500, "PARSE_FAILED", "Failed to parse documents for all companies.")
+        raise ExternalServiceError("document_parsing", "Failed to parse documents for all companies.")
 
 
 
@@ -165,11 +165,11 @@ async def chunk_documents_by_ticker(
     logger.info(f"Chunk request for: {ticker}")
     try:
         return service.chunk_by_ticker(ticker, chunk_size, chunk_overlap)
-    except ValueError as e:
-        raise_error(404, "NOT_FOUND", str(e))
+    except PlatformError:
+        raise
     except Exception as e:
         logger.error(f"Chunk failed for {ticker}: {e}")
-        raise_error(500, "CHUNK_FAILED", "Failed to chunk documents.")
+        raise ExternalServiceError("document_chunking", "Failed to chunk documents.")
 
 
 @router.post(
@@ -188,4 +188,4 @@ async def chunk_all_documents(
         return service.chunk_all_companies(chunk_size, chunk_overlap)
     except Exception as e:
         logger.error(f"Batch chunking failed: {e}")
-        raise_error(500, "CHUNK_FAILED", "Failed to chunk documents for all companies.")
+        raise ExternalServiceError("document_chunking", "Failed to chunk documents for all companies.")

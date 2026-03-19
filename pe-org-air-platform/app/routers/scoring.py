@@ -19,6 +19,7 @@ import time
 
 from app.core.dependencies import get_scoring_service, get_scoring_repository
 from app.core.exceptions import raise_error
+from app.core.errors import NotFoundError
 from app.utils.serialization import serialize_row
 
 logger = logging.getLogger(__name__)
@@ -209,11 +210,7 @@ async def get_dimension_scores(
         rows = repo.get_dimension_scores(ticker)
 
         if not rows:
-            raise_error(
-                404,
-                "SCORES_NOT_FOUND",
-                f"No dimension scores found for {ticker}. Run POST /api/v1/scoring/{ticker} first.",
-            )
+            raise NotFoundError("dimension_scores", ticker)
 
         clean_rows = [serialize_row(r) for r in rows]
 

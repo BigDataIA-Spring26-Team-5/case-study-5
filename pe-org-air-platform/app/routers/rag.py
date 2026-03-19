@@ -34,6 +34,7 @@ from app.core.dependencies import (
     get_ic_prep_workflow as _get_ic_prep,
 )
 from app.core.exceptions import raise_error
+from app.core.errors import ValidationError as PlatformValidationError
 from app.config.retrieval_settings import RETRIEVAL_SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -843,17 +844,17 @@ async def chatbot_query(
     result = validate_ticker(ticker)
     if not result.passed:
         logger.warning(f"rag.guardrail_blocked guard=validate_ticker reason={result.reason}")
-        raise_error(400, "VALIDATION_FAILED", result.reason)
+        raise PlatformValidationError(result.reason)
 
     result = validate_question(question)
     if not result.passed:
         logger.warning(f"rag.guardrail_blocked guard=validate_question reason={result.reason}")
-        raise_error(400, "VALIDATION_FAILED", result.reason)
+        raise PlatformValidationError(result.reason)
 
     result = validate_dimension(dimension)
     if not result.passed:
         logger.warning(f"rag.guardrail_blocked guard=validate_dimension reason={result.reason}")
-        raise_error(400, "VALIDATION_FAILED", result.reason)
+        raise PlatformValidationError(result.reason)
 
     logger.info(f"rag.chatbot_query ticker={ticker} question_len={len(question)}")
 

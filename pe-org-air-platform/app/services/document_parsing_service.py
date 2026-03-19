@@ -126,7 +126,7 @@ class DocumentParsingService:
         
         if not docs:
             logger.warning(f"❌ No documents found for ticker: {ticker}")
-            raise ValueError(f"No documents found for ticker: {ticker}")
+            raise NotFoundError("documents", ticker)
         
         logger.info(f"📚 Found {len(docs)} documents to parse")
         

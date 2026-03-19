@@ -18,6 +18,7 @@ from fastapi import Request, status
 # ---------------------------------------------------------------------------
 
 def raise_error(status_code: int, error_code: str, message: str) -> None:
+    # DEPRECATED: Use app.core.errors.PlatformError subclasses instead.
     """Raise an HTTPException with a standardised error detail dict."""
     raise HTTPException(
         status_code=status_code,
@@ -126,84 +127,3 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
-
-# ---------------------------------------------------------------------------
-# Service-layer exceptions
-# ---------------------------------------------------------------------------
-
-class ServiceException(Exception):
-    """Base exception for service-layer errors."""
-    pass
-
-
-class ExternalServiceError(ServiceException):
-    """An external dependency (API, DB, S3) failed."""
-
-    def __init__(self, service: str, message: str, retryable: bool = False):
-        self.service = service
-        self.retryable = retryable
-        super().__init__(f"[{service}] {message}")
-
-
-class EvidenceNotFoundError(ServiceException):
-    """Expected evidence data was missing."""
-
-    def __init__(self, ticker: str, dimension: str = ""):
-        self.ticker = ticker
-        self.dimension = dimension
-        detail = f"No evidence for {ticker}"
-        if dimension:
-            detail += f" dimension={dimension}"
-        super().__init__(detail)
-
-
-# ---------------------------------------------------------------------------
-# Repository exceptions
-# ---------------------------------------------------------------------------
-
-class RepositoryException(Exception):
-    """Base exception for repository operations."""
-
-    pass
-
-
-class EntityNotFoundException(RepositoryException):
-    """Entity not found in database."""
-
-    def __init__(self, entity_type: str, entity_id: str):
-        self.entity_type = entity_type
-        self.entity_id = entity_id
-        super().__init__(f"{entity_type} with ID {entity_id} not found")
-
-
-class EntityDeletedException(RepositoryException):
-    """Entity has been soft-deleted."""
-
-    def __init__(self, entity_type: str, entity_id: str):
-        self.entity_type = entity_type
-        self.entity_id = entity_id
-        super().__init__(f"{entity_type} with ID {entity_id} has been deleted")
-
-
-class DuplicateEntityException(RepositoryException):
-    """Duplicate entity violation."""
-
-    def __init__(self, message: str = "Entity already exists"):
-        self.message = message
-        super().__init__(message)
-
-
-class DatabaseConnectionException(RepositoryException):
-    """Database connection failure."""
-
-    def __init__(self, message: str = "Database connection failed"):
-        self.message = message
-        super().__init__(message)
-
-
-class ForeignKeyViolationException(RepositoryException):
-    """Foreign key constraint violation."""
-
-    def __init__(self, message: str = "Foreign key constraint violation"):
-        self.message = message
-        super().__init__(message)

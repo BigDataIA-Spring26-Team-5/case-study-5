@@ -28,7 +28,7 @@ from app.core.dependencies import (
     get_leadership_service,
     get_task_store,
 )
-from app.core.exceptions import raise_error
+from app.core.errors import NotFoundError
 from app.routers.common import get_company_or_404
 
 logger = logging.getLogger(__name__)
@@ -221,7 +221,7 @@ async def get_task_status(
 ):
     task = task_store.get_task(task_id)
     if task is None:
-        raise_error(404, "TASK_NOT_FOUND", f"Task not found or expired: {task_id}")
+        raise NotFoundError("task", task_id)
     return task
 
 

@@ -20,7 +20,7 @@ from app.core.dependencies import (
     get_composite_scoring_service,
     get_scoring_repository,
 )
-from app.core.exceptions import raise_error
+from app.core.errors import NotFoundError
 from app.schemas.scoring import CompanyAssessmentRead, DimensionScoreRead
 from app.services.composite_scoring_service import OrgAIRResponse
 
@@ -214,7 +214,7 @@ async def get_assessment(
     # 1. Verify the company exists
     company = company_repo.get_by_ticker(ticker)
     if not company:
-        raise_error(404, "COMPANY_NOT_FOUND", f"Company '{ticker}' not found")
+        raise NotFoundError("company", ticker)
 
     company_id = str(company["id"])
 

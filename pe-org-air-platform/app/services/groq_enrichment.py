@@ -16,6 +16,8 @@ from typing import Dict, List, Optional
 
 import httpx
 
+from app.core.errors import ExternalServiceError
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -32,7 +34,7 @@ GROQ_MODEL = "llama-3.1-8b-instant"
 def _get_api_key() -> str:
     key = os.getenv("GROQ_API_KEY", "")
     if not key:
-        raise RuntimeError("GROQ_API_KEY environment variable is not set")
+        raise ExternalServiceError("groq", "GROQ_API_KEY environment variable is not set")
     return key
 
 

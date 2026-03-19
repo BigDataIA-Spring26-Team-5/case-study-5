@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 
 from app.core.dependencies import get_company_repository, get_industry_repository
 from app.core.exceptions import raise_error
+from app.core.errors import NotFoundError, ConflictError
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.industry_repository import IndustryRepository
 from app.services.cache import (
@@ -107,13 +108,13 @@ class PaginatedCompanyResponse(BaseModel):
 
 
 def raise_company_not_found():
-    raise_error(status.HTTP_404_NOT_FOUND, "COMPANY_NOT_FOUND", "Company not found")
+    raise NotFoundError("company", "unknown")
 
 def raise_industry_not_found():
-    raise_error(status.HTTP_404_NOT_FOUND, "INDUSTRY_NOT_FOUND", "Industry does not exist")
+    raise NotFoundError("industry", "unknown")
 
 def raise_duplicate_company():
-    raise_error(status.HTTP_409_CONFLICT, "DUPLICATE_COMPANY", "Company already exists in this industry")
+    raise ConflictError("Company already exists in this industry", error_code="DUPLICATE_COMPANY")
 
 
 
@@ -186,7 +187,7 @@ def resolve_company_identifier(
     except ValueError:
         company = company_repo.get_by_ticker(ticker)
     if company is None:
-        raise_error(status.HTTP_404_NOT_FOUND, "COMPANY_NOT_FOUND", f"Company '{ticker}' not found")
+        raise NotFoundError("company", ticker)
     return company
 
 

@@ -78,10 +78,12 @@
 """CS1 Client — Company metadata from the PE Org-AI-R platform."""
 from __future__ import annotations
 
-import httpx
 from dataclasses import dataclass, field
 from typing import List, Optional
 from enum import Enum
+
+from app.clients.base import BaseAPIClient
+from app.core.errors import NotFoundError
 
 
 class Sector(str, Enum):
@@ -115,21 +117,19 @@ class Portfolio:
     fund_vintage: int = 0
 
 
-class CS1Client:
+class CS1Client(BaseAPIClient):
     """Fetches company metadata from CS1 API endpoints."""
 
     def __init__(self, base_url: str = "http://localhost:8000"):
-        self.base_url = base_url.rstrip("/") + "/api/v1"
-        self._client = httpx.AsyncClient(timeout=30.0)
+        super().__init__(base_url + "/api/v1", "cs1", timeout=30.0)
 
     async def get_company(self, ticker: str) -> Optional[Company]:
         """Fetch a single company by ticker."""
-        resp = await self._client.get(f"{self.base_url}/companies/{ticker}")
-        if resp.status_code == 404:
+        try:
+            data = await self.get(f"/companies/{ticker}")
+            return self._parse_company(data)
+        except NotFoundError:
             return None
-        resp.raise_for_status()
-        data = resp.json()
-        return self._parse_company(data)
 
     async def list_companies(
         self,
@@ -142,9 +142,7 @@ class CS1Client:
             params["sector"] = sector.value
         if min_revenue is not None:
             params["min_revenue"] = min_revenue
-        resp = await self._client.get(f"{self.base_url}/companies", params=params)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await self.get("/companies", params=params)
         companies = data if isinstance(data, list) else data.get("companies", [])
         return [self._parse_company(c) for c in companies]
 
@@ -167,12 +165,3 @@ class CS1Client:
             employee_count=int(data.get("employee_count", 0)),
             fiscal_year_end=data.get("fiscal_year_end", ""),
         )
-
-    async def close(self):
-        await self._client.aclose()
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        await self.close()

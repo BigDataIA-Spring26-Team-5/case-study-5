@@ -20,6 +20,7 @@ from app.repositories.company_repository import CompanyRepository
 from app.services.collection.analyst_notes import AnalystNotesCollector
 from app.core.dependencies import get_company_repository, get_analyst_notes_collector
 from app.core.exceptions import raise_error
+from app.core.errors import NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def _resolve_company(ticker: str, repo: CompanyRepository) -> tuple[str, str]:
     ticker = ticker.upper()
     company = repo.get_by_ticker(ticker)
     if company is None:
-        raise_error(404, "COMPANY_NOT_FOUND", f"Company '{ticker}' not found.")
+        raise NotFoundError("company", ticker)
     return ticker, str(company["id"])
 
 

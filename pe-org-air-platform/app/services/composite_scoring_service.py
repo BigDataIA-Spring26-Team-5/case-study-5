@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel
 
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError, PipelineIncompleteError
 
 logger = logging.getLogger(__name__)
 
@@ -511,18 +512,18 @@ class CompositeScoringService:
             # ---- 1. Get V^R (saves TC+VR as a side effect) ----
             tc_vr_result = self.compute_tc_vr(ticker)
             if tc_vr_result.status != "success":
-                raise ValueError(f"TC+VR scoring failed: {tc_vr_result.error}")
+                raise PipelineIncompleteError(ticker, ["tc_vr"])
 
             vr_score = tc_vr_result.vr_result.vr_score
 
             # ---- 2. Manual inputs ----
             market_cap_percentile = MARKET_CAP_PERCENTILES.get(ticker)
             if market_cap_percentile is None:
-                raise ValueError(f"No market cap percentile defined for {ticker}")
+                raise NotFoundError("market_cap_percentile", ticker)
 
             sector = COMPANY_SECTORS.get(ticker)
             if sector is None:
-                raise ValueError(f"No sector defined for {ticker}")
+                raise NotFoundError("sector", ticker)
 
             logger.info(f"[{ticker}] VR Score: {vr_score:.2f}")
             logger.info(
@@ -629,14 +630,14 @@ class CompositeScoringService:
             # ---- 1. Get V^R (saves TC+VR as a side effect) ----
             tc_vr_result = self.compute_tc_vr(ticker)
             if tc_vr_result.status != "success":
-                raise ValueError(f"TC+VR scoring failed: {tc_vr_result.error}")
+                raise PipelineIncompleteError(ticker, ["tc_vr"])
 
             vr_score = tc_vr_result.vr_result.vr_score
 
             # ---- 2. Compute PF inline ----
             sector = COMPANY_SECTORS.get(ticker)
             if sector is None:
-                raise ValueError(f"No sector defined for {ticker}")
+                raise NotFoundError("sector", ticker)
 
             market_cap_percentile = MARKET_CAP_PERCENTILES.get(ticker, 0.50)
             position_factor = float(
@@ -744,11 +745,11 @@ class CompositeScoringService:
                 else self.compute_tc_vr(ticker)
             )
             if vr_response.status != "success":
-                raise ValueError(f"V^R calculation failed: {vr_response.error}")
+                raise PipelineIncompleteError(ticker, ["vr"])
 
             vr_score = vr_response.vr_result.vr_score if vr_response.vr_result else None
             if vr_score is None:
-                raise ValueError("V^R score missing from TC+VR response")
+                raise PipelineIncompleteError(ticker, ["vr"])
 
             logger.info(f"[{ticker}] V^R = {vr_score:.2f}")
 
