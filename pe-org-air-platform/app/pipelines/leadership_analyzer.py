@@ -30,16 +30,11 @@ FIXES (v3 — keyword expansion for NVDA):
   - BOARD_EXPERTISE_PATTERNS: added semiconductor/AI companies
 """
 import re
-import logging
+import structlog
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 @dataclass

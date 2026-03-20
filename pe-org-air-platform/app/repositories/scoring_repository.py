@@ -9,12 +9,12 @@ Tables:
 Follows existing repo pattern: singleton, get_snowflake_connection(), cursor-based.
 """
 
-import logging
+import structlog
 from typing import Dict, List, Optional
 from uuid import uuid4
 from app.repositories.base import BaseRepository
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class ScoringRepository(BaseRepository):
@@ -411,6 +411,74 @@ class ScoringRepository(BaseRepository):
             finally:
                 cur.close()
 
+    # =====================================================================
+    # scoring_runs — Phase 3A run tracking
+    # =====================================================================
+
+    def create_scoring_run(self, run_id: str, ticker: str) -> None:
+        sql = """
+        INSERT INTO scoring_runs (run_id, ticker, status, started_at)
+        VALUES (%s, %s, 'running', CURRENT_TIMESTAMP())
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (run_id, ticker.upper()))
+                conn.commit()
+            finally:
+                cur.close()
+
+    def complete_scoring_run(self, run_id: str, dimensions_written: int) -> None:
+        sql = """
+        UPDATE scoring_runs
+        SET status = 'completed', completed_at = CURRENT_TIMESTAMP(),
+            dimensions_written = %s
+        WHERE run_id = %s
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (dimensions_written, run_id))
+                conn.commit()
+            finally:
+                cur.close()
+
+    def fail_scoring_run(self, run_id: str, error_message: str) -> None:
+        sql = """
+        UPDATE scoring_runs
+        SET status = 'failed', completed_at = CURRENT_TIMESTAMP(),
+            error_message = %s
+        WHERE run_id = %s
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (str(error_message)[:2000], run_id))
+                conn.commit()
+            finally:
+                cur.close()
+
+    def get_latest_scoring_run(self, ticker: str) -> Optional[Dict]:
+        sql = """
+        SELECT run_id, ticker, status, started_at, completed_at,
+               dimensions_written, error_message
+        FROM scoring_runs
+        WHERE ticker = %s
+        ORDER BY started_at DESC
+        LIMIT 1
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (ticker.upper(),))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                columns = [col[0].lower() for col in cur.description]
+                return dict(zip(columns, row))
+            finally:
+                cur.close()
+
     def upsert_culture_mapping(self, ticker: str, signal_data: dict) -> bool:
         """
         Upsert the glassdoor_reviews row into signal_dimension_mapping.
@@ -442,11 +510,3 @@ class ScoringRepository(BaseRepository):
             return False
 
 
-# Singleton
-_repo: Optional[ScoringRepository] = None
-
-def get_scoring_repository() -> ScoringRepository:
-    global _repo
-    if _repo is None:
-        _repo = ScoringRepository()
-    return _repo

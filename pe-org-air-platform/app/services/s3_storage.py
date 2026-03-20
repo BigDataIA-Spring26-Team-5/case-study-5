@@ -3,7 +3,7 @@ import hashlib
 import logging
 from typing import Optional, Tuple
 from botocore.exceptions import ClientError
-from app.config import settings
+from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
 

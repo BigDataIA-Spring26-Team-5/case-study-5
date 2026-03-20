@@ -18,7 +18,6 @@ no SQL semantics were altered.
 from typing import Dict, List, Optional, Any
 
 from app.repositories.base import BaseRepository
-from app.services.utils import make_singleton_factory
 
 
 class CompositeScoringRepository(BaseRepository):
@@ -539,4 +538,3 @@ class CompositeScoringRepository(BaseRepository):
         self._execute(sql, params)
 
 
-get_composite_scoring_repo = make_singleton_factory(CompositeScoringRepository)

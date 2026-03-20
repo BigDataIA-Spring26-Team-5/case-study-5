@@ -8,7 +8,6 @@ BaseRepository.get_connection() -> get_snowflake_connection() (single gateway).
 from typing import Dict, List, Tuple
 
 from app.repositories.base import BaseRepository
-from app.services.utils import make_singleton_factory
 
 PLATFORM_TABLES: List[str] = [
     "INDUSTRIES", "COMPANIES", "ASSESSMENTS", "DIMENSION_SCORES",
@@ -44,4 +43,3 @@ class HealthRepository(BaseRepository):
         return counts
 
 
-get_health_repo = make_singleton_factory(HealthRepository)

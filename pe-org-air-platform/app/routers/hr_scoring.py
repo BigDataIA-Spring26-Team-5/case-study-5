@@ -7,23 +7,19 @@ Endpoints:
 Already registered in main.py as hr_router.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any
 import logging
 import time
 
-from app.services.composite_scoring_service import (
-    get_composite_scoring_service,
-    HRResponse,
-)
+from app.config.company_mappings import CS3_PORTFOLIO
+from app.core.dependencies import get_composite_scoring_service
+from app.services.composite_scoring_service import HRResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/scoring", tags=["CS3 H^R (Human Readiness)"])
-
-# The 5 CS3 portfolio companies
-CS3_PORTFOLIO = ["NVDA", "JPM", "WMT", "GE", "DG"]
 
 
 # =====================================================================
@@ -60,10 +56,11 @@ class PortfolioHRResponse(BaseModel):
     Returns individual breakdowns + summary comparison table.
     """,
 )
-async def score_portfolio_hr():
+async def score_portfolio_hr(
+    svc=Depends(get_composite_scoring_service),
+):
     """Calculate H^R for all 5 companies."""
     start = time.time()
-    svc = get_composite_scoring_service()
 
     logger.info("=" * 70)
     logger.info("H^R PORTFOLIO SCORING — 5 COMPANIES")

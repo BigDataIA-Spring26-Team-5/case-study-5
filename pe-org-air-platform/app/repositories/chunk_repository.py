@@ -1,9 +1,9 @@
 from typing import List, Dict, Optional
 from uuid import uuid4
-import logging
+import structlog
 from app.repositories.base import BaseRepository
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class ChunkRepository(BaseRepository):
@@ -325,11 +325,3 @@ class ChunkRepository(BaseRepository):
                 cur.close()
 
 
-# Singleton
-_repo: Optional[ChunkRepository] = None
-
-def get_chunk_repository() -> ChunkRepository:
-    global _repo
-    if _repo is None:
-        _repo = ChunkRepository()
-    return _repo

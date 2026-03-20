@@ -1,10 +1,10 @@
-import logging
+import structlog
 import hashlib
 from typing import List, Dict, Optional
 from datetime import datetime
 from app.pipelines.sec_edgar import get_sec_collector, SECFiling
 from app.services.s3_storage import get_s3_service
-from app.repositories.document_repository import get_document_repository
+from app.repositories.document_repository import DocumentRepository
 from app.repositories.company_repository import CompanyRepository
 from app.models.document import (
     DocumentCollectionRequest,
@@ -13,23 +13,18 @@ from app.models.document import (
     DocumentStatus
 )
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError
 
-# Configure logging to show in terminal
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 class DocumentCollectorService:
     """Service to orchestrate SEC filing collection"""
-    
-    def __init__(self):
+
+    def __init__(self, company_repo=None, document_repo=None):
         self.sec_collector = get_sec_collector()
         self.s3_service = get_s3_service()
-        self.doc_repo = get_document_repository()
-        self.company_repo = CompanyRepository()
+        self.doc_repo = document_repo or DocumentRepository()
+        self.company_repo = company_repo or CompanyRepository()
 
     def collect_for_company(self, request: DocumentCollectionRequest) -> DocumentCollectionResponse:
         """
@@ -50,12 +45,18 @@ class DocumentCollectorService:
         company = self.company_repo.get_by_ticker(ticker)
         if not company:
             logger.error(f"❌ Company not found for ticker: {ticker}")
-            raise ValueError(f"Company not found for ticker: {ticker}")
+            raise NotFoundError("company", ticker)
         
         company_id = str(company['id'])
         company_name = company['name']
         logger.info(f"✅ Found company: {company_name} (ID: {company_id})")
-        
+
+        # Verify CIK is resolvable before starting collection
+        cik = self.sec_collector.get_cik(ticker)
+        if not cik:
+            logger.error(f"❌ Could not resolve CIK for ticker: {ticker}")
+            raise NotFoundError("cik", ticker)
+
         # Track results
         documents_found = 0
         documents_uploaded = 0

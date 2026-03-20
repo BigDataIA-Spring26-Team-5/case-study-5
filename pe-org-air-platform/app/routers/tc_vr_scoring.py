@@ -7,23 +7,19 @@ Endpoints:
 Already registered in main.py as tc_vr_router.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any
-import logging
+import structlog
 import time
 
-from app.services.composite_scoring_service import (
-    get_composite_scoring_service,
-    TCVRResponse,
-)
+from app.config.company_mappings import CS3_PORTFOLIO
+from app.core.dependencies import get_composite_scoring_service
+from app.services.composite_scoring_service import TCVRResponse
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/v1/scoring", tags=["CS3 TC + V^R Scoring"])
-
-# The 5 CS3 portfolio companies
-CS3_PORTFOLIO = ["NVDA", "JPM", "WMT", "GE", "DG"]
 
 
 # =====================================================================
@@ -55,10 +51,11 @@ class PortfolioTCVRResponse(BaseModel):
     Validates against CS3 Table 5 expected ranges.
     """,
 )
-async def score_portfolio_tc_vr():
+async def score_portfolio_tc_vr(
+    svc=Depends(get_composite_scoring_service),
+):
     """Score all 5 companies — TC + V^R."""
     start = time.time()
-    svc = get_composite_scoring_service()
 
     logger.info("=" * 70)
     logger.info("TC + V^R PORTFOLIO SCORING — 5 COMPANIES")

@@ -17,24 +17,11 @@ Naming convention: Uses existing Dimension enum values from app.models.enumerati
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 from enum import Enum
+from typing import Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 
-
-# ---------------------------------------------------------------------------
-# Enums — aligned with existing app.models.enumerations.Dimension
-# ---------------------------------------------------------------------------
-
-class Dimension(str, Enum):
-    """The 7 V^R dimensions (matches app.models.enumerations.Dimension)."""
-    DATA_INFRASTRUCTURE = "data_infrastructure"
-    AI_GOVERNANCE = "ai_governance"
-    TECHNOLOGY_STACK = "technology_stack"
-    TALENT_SKILLS = "talent_skills"           # CS3 calls this "talent"
-    LEADERSHIP_VISION = "leadership_vision"   # CS3 calls this "leadership"
-    USE_CASE_PORTFOLIO = "use_case_portfolio"
-    CULTURE_CHANGE = "culture_change"         # CS3 calls this "culture"
+from app.models.enumerations import Dimension
 
 
 class SignalSource(str, Enum):

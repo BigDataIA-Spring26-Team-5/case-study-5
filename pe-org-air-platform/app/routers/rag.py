@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.services.integration.cs2_client import CS2Client
 from app.services.search.vector_store import VectorStore, EMBEDDING_MODEL
-from app.services.retrieval.hybrid import HybridRetriever
+from app.services.retrieval.hybrid import HybridRetriever, RetrievedDocument
 from app.services.retrieval.dimension_mapper import DimensionMapper
 from app.services.retrieval.hyde import HyDERetriever
 from app.services.justification.generator import JustificationGenerator
@@ -24,45 +24,25 @@ from app.prompts.rag_prompts import (
 import structlog
 from app.guardrails.input_guards import validate_ticker, validate_question, validate_dimension
 from app.guardrails.output_guards import check_answer_length, check_answer_grounded, check_no_refusal
+from app.models.enumerations import DIMENSION_ALIAS_MAP
+from app.core.dependencies import (
+    get_vector_store as _get_vector_store,
+    get_hybrid_retriever as _get_retriever,
+    get_model_router as _get_router,
+    get_dimension_mapper as _get_mapper,
+    get_cs2_client as _get_cs2,
+    get_ic_prep_workflow as _get_ic_prep,
+    get_scoring_repository as _get_scoring_repo,
+    get_signal_repository as _get_signal_repo,
+)
+from app.core.errors import ValidationError as PlatformValidationError, ExternalServiceError
+from app.config.retrieval_settings import RETRIEVAL_SETTINGS
 
-logger = structlog.get_logger(__name__)
+logger = structlog.get_logger()
 
-MAX_CONTEXT_CHARS = 6000
+MAX_CONTEXT_CHARS = RETRIEVAL_SETTINGS.max_context_chars
 
-router = APIRouter(prefix="/rag", tags=["CS4 RAG"])
-
-_vector_store: Optional[VectorStore] = None
-_retriever: Optional[HybridRetriever] = None
-_router_llm: Optional[ModelRouter] = None
-_mapper: Optional[DimensionMapper] = None
-
-
-def _get_vector_store() -> VectorStore:
-    global _vector_store
-    if _vector_store is None:
-        _vector_store = VectorStore()
-    return _vector_store
-
-
-def _get_retriever() -> HybridRetriever:
-    global _retriever
-    if _retriever is None:
-        _retriever = HybridRetriever()
-    return _retriever
-
-
-def _get_router() -> ModelRouter:
-    global _router_llm
-    if _router_llm is None:
-        _router_llm = ModelRouter()
-    return _router_llm
-
-
-def _get_mapper() -> DimensionMapper:
-    global _mapper
-    if _mapper is None:
-        _mapper = DimensionMapper()
-    return _mapper
+router = APIRouter(prefix="/api/v1/rag", tags=["CS4 RAG"])
 
 
 # ── Dimension → keyword query map ─────────────────────────────────────────────
@@ -199,11 +179,7 @@ async def _detect_dimension_with_llm(
         if detected in valid_dims:
             logger.info("rag.llm_dim_detected", question=question[:80], dimension=detected)
             return detected, 0.75
-        logger.warning(
-            "rag.llm_dim_invalid_response",
-            question=question[:80],
-            raw_response=raw[:100],
-        )
+        logger.warning("rag.llm_dim_invalid_response", question=question[:80], raw_response=raw[:100])
         return None, 0.0
     except Exception as e:
         logger.warning("rag.llm_dim_detection_failed", question=question[:80], error=str(e))
@@ -325,6 +301,7 @@ async def _retrieve_with_fallback(
     top_k: int,
     min_results: int = 3,
     dim_confidence: float = 1.0,
+    vector_store: Optional[VectorStore] = None,
 ) -> List:
     """
     Retrieve with graceful dimension-filter fallback.
@@ -332,9 +309,10 @@ async def _retrieve_with_fallback(
     FIX: When dimension is None (broad questions), retrieves across ALL
     source types to give balanced evidence from SEC, jobs, Glassdoor, patents.
     """
+    vs = vector_store or _get_vector_store()
+
     # Talent dimension — force job postings via direct vector store search
     if dimension == "talent":
-        vs = _get_vector_store()
         talent_query = (
             "machine learning AI engineer data scientist MLOps deep learning "
             "generative AI LLM hiring software engineer " + query
@@ -365,7 +343,6 @@ async def _retrieve_with_fallback(
 
     # Culture dimension — force Glassdoor via direct vector store search
     if dimension == "culture":
-        vs = _get_vector_store()
         culture_results = vs.search(
             query=query, top_k=top_k,
             ticker=ticker,
@@ -379,8 +356,6 @@ async def _retrieve_with_fallback(
         # For broad questions, pull from diverse sources using DENSE search only
         # (skip BM25 which may be under-seeded). Use the vector store directly
         # for faster, more reliable results across source types.
-        vs = _get_vector_store()
-
         source_groups = [
             ["sec_10k_item_1"],
             ["sec_10k_item_7"],
@@ -403,7 +378,8 @@ async def _retrieve_with_fallback(
                 )
                 for r in group_results:
                     diverse_results.append(r)
-            except Exception:
+            except Exception as e:
+                logger.debug("rag.broad_group_search_failed", src_types=src_types, error=str(e))
                 continue
 
         if len(diverse_results) >= min_results:
@@ -414,16 +390,7 @@ async def _retrieve_with_fallback(
             for r in sorted(diverse_results, key=lambda x: x.score, reverse=True):
                 if r.doc_id not in seen:
                     seen.add(r.doc_id)
-                    # Wrap in a simple object with same interface as HybridRetriever results
-                    from dataclasses import dataclass as _dc, field as _f
-                    @_dc
-                    class _BroadResult:
-                        doc_id: str = ""
-                        content: str = ""
-                        metadata: dict = _f(default_factory=dict)
-                        score: float = 0.0
-                        retrieval_method: str = "dense_diverse"
-                    deduped.append(_BroadResult(
+                    deduped.append(RetrievedDocument(
                         doc_id=r.doc_id,
                         content=r.content,
                         metadata=r.metadata,
@@ -455,12 +422,9 @@ async def _retrieve_with_fallback(
         if len(results) >= min_results:
             return results
 
-        logger.info(
-            "rag.fallback_triggered",
-            ticker=ticker, dimension=dimension,
-            dim_confidence=dim_confidence, dim_results=len(results),
-            reason="too_few_dim_results",
-        )
+        logger.info("rag.fallback_triggered", ticker=ticker, dimension=dimension,
+                    dim_confidence=dim_confidence, dim_results=len(results),
+                    reason="too_few_dim_results")
 
         # SEC source affinity for SEC-primary dimensions
         # FIX: prioritize Item 1 and Item 7 over Item 1A for non-governance dims
@@ -585,12 +549,13 @@ async def index_company_evidence(
     signal_categories: Optional[str] = Query(None),
     min_confidence: float = Query(0.0),
     force: bool = Query(False),
+    vs: VectorStore = Depends(_get_vector_store),
+    retriever: HybridRetriever = Depends(_get_retriever),
+    mapper: DimensionMapper = Depends(_get_mapper),
+    cs2: CS2Client = Depends(_get_cs2),
 ):
     """Fetch CS2 evidence for a company and index into ChromaDB."""
     logger.info("rag.index_start", ticker=ticker, force=force)
-    cs2 = CS2Client()
-    vs = _get_vector_store()
-    mapper = _get_mapper()
 
     if force:
         st_list = [s.strip() for s in source_types.split(",")] if source_types else None
@@ -615,20 +580,23 @@ async def index_company_evidence(
     if evidence:
         cs2.mark_indexed([e.evidence_id for e in evidence])
 
-    _get_retriever().refresh_sparse_index()
-    _get_retriever().seed_from_evidence(evidence)
+    retriever.seed_from_evidence(evidence)
+    retriever.refresh_sparse_index()
 
     logger.info("rag.index_complete", ticker=ticker, indexed_count=count)
     return IndexResponse(indexed_count=count, ticker=ticker, source_counts=dict(source_counts))
 
 
 @router.post("/index", response_model=BulkIndexResponse)
-async def bulk_index_evidence(req: BulkIndexRequest):
+async def bulk_index_evidence(
+    req: BulkIndexRequest,
+    vs: VectorStore = Depends(_get_vector_store),
+    retriever: HybridRetriever = Depends(_get_retriever),
+    mapper: DimensionMapper = Depends(_get_mapper),
+    cs2: CS2Client = Depends(_get_cs2),
+):
     """Index CS2 evidence for multiple tickers in a single call."""
     logger.info("rag.bulk_index_start", tickers=req.tickers)
-    cs2 = CS2Client()
-    vs = _get_vector_store()
-    mapper = _get_mapper()
 
     from collections import defaultdict
     results: Dict[str, IndexResponse] = {}
@@ -667,63 +635,72 @@ async def bulk_index_evidence(req: BulkIndexRequest):
             failed[ticker] = str(e)
             logger.warning("rag.bulk_index_ticker_error", ticker=ticker, error=str(e))
 
-    _get_retriever().refresh_sparse_index()
     if all_evidence:
-        _get_retriever().seed_from_evidence(all_evidence)
+        retriever.seed_from_evidence(all_evidence)
+    retriever.refresh_sparse_index()
 
     total_indexed = sum(r.indexed_count for r in results.values())
     return BulkIndexResponse(results=results, total_indexed=total_indexed, failed=failed)
 
 
 @router.delete("/index")
-async def wipe_index(ticker: Optional[str] = Query(None)):
+async def wipe_index(
+    ticker: Optional[str] = Query(None),
+    vs: VectorStore = Depends(_get_vector_store),
+    retriever: HybridRetriever = Depends(_get_retriever),
+):
     """Delete documents from the ChromaDB index."""
-    vs = _get_vector_store()
     if ticker:
         wiped = vs.delete_by_filter({"ticker": {"$eq": ticker}})
     else:
         wiped = vs.wipe()
-        _get_retriever().refresh_sparse_index()
+        retriever.refresh_sparse_index()
     return {"wiped_count": wiped, "scope": ticker if ticker else "all"}
 
 
 @router.post("/search", response_model=List[SearchResult])
-async def search_evidence(req: SearchRequest):
+async def search_evidence(
+    req: SearchRequest,
+    retriever: HybridRetriever = Depends(_get_retriever),
+    vs: VectorStore = Depends(_get_vector_store),
+    llm_router: ModelRouter = Depends(_get_router),
+):
     """Hybrid dense + sparse search with optional HyDE enhancement."""
     logger.info("rag.search_start", query_len=len(req.query), ticker=req.ticker)
-    retriever = _get_retriever()
 
     source_types = None
     if req.source_types:
         source_types = [s for s in req.source_types if s and s != "string"]
 
-    if req.use_hyde and req.dimension:
+    dimension = DIMENSION_ALIAS_MAP.get(req.dimension, req.dimension) if req.dimension else None
+
+    if req.use_hyde and dimension:
         filter_meta = _build_filter(
             req.ticker or "",
-            dimension=req.dimension,
+            dimension=dimension,
             source_types=source_types,
         ) if req.ticker else {}
-        llm_router = _get_router()
         hyde = HyDERetriever(retriever, llm_router)
         results = hyde.retrieve(
             req.query, k=req.top_k,
             filters=filter_meta or None,
-            dimension=req.dimension or "",
+            dimension=dimension or "",
         )
     elif req.ticker:
         results = await _retrieve_with_fallback(
             retriever=retriever,
             query=req.query,
             ticker=req.ticker,
-            dimension=req.dimension if req.dimension and req.dimension != "string" else None,
+            dimension=dimension if dimension and dimension != "string" else None,
             top_k=req.top_k,
+            vector_store=vs,
         )
     else:
         filter_meta: Dict[str, Any] = {}
         if source_types:
             filter_meta["source_type"] = {"$in": source_types}
-        if req.dimension and req.dimension != "string":
-            filter_meta["dimension"] = req.dimension
+        if dimension and dimension != "string":
+            filter_meta["dimension"] = dimension
         results = retriever.retrieve(
             req.query, k=req.top_k,
             filter_metadata=filter_meta or None,
@@ -743,18 +720,21 @@ async def search_evidence(req: SearchRequest):
 
 
 @router.get("/justify/{ticker}/{dimension}", response_model=JustifyResponse)
-async def justify_score(ticker: str, dimension: str):
+async def justify_score(
+    ticker: str,
+    dimension: str,
+    retriever: HybridRetriever = Depends(_get_retriever),
+    llm_router: ModelRouter = Depends(_get_router),
+):
     """Generate IC-ready justification for a dimension score with cited evidence."""
     logger.info("rag.justify_start", ticker=ticker, dimension=dimension)
-    retriever = _get_retriever()
-    llm_router = _get_router()
     gen = JustificationGenerator(retriever=retriever, router=llm_router)
 
     try:
         j = await asyncio.to_thread(gen.generate_justification, ticker, dimension)
     except Exception as e:
         logger.error("rag.justify_error", ticker=ticker, dimension=dimension, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ExternalServiceError("rag", "An internal error occurred during RAG processing.")
 
     return JustifyResponse(
         ticker=j.company_id,
@@ -781,16 +761,19 @@ async def justify_score(ticker: str, dimension: str):
 
 
 @router.get("/ic-prep/{ticker}", response_model=ICPrepResponse)
-async def ic_prep(ticker: str, dimensions: Optional[str] = Query(None)):
+async def ic_prep(
+    ticker: str,
+    dimensions: Optional[str] = Query(None),
+    workflow: ICPrepWorkflow = Depends(_get_ic_prep),
+):
     """Generate full 7-dimension IC meeting package with recommendation."""
     focus = [d.strip() for d in dimensions.split(",")] if dimensions else None
     logger.info("rag.ic_prep_start", ticker=ticker, focus_dimensions=focus)
-    workflow = ICPrepWorkflow()
     try:
         pkg = await workflow.prepare_meeting(ticker, focus_dimensions=focus)
     except Exception as e:
         logger.error("rag.ic_prep_error", ticker=ticker, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ExternalServiceError("rag", "An internal error occurred during RAG processing.")
 
     dim_scores = {dim: j.score for dim, j in pkg.dimension_justifications.items()}
     return ICPrepResponse(
@@ -807,84 +790,40 @@ async def ic_prep(ticker: str, dimensions: Optional[str] = Query(None)):
     )
 
 
-@router.get("/status")
-async def rag_status():
-    """Returns ChromaDB index stats and system status."""
-    vs = _get_vector_store()
-    indexed = vs.count()
-    return {
-        "status": "operational",
-        "indexed_documents": indexed,
-        "vector_store": "ChromaDB",
-        "embedding_model": EMBEDDING_MODEL,
-        "llm_providers": ["groq/llama-3.1-8b-instant", "deepseek/deepseek-chat"],
-    }
-
-
-@router.get("/debug")
-async def rag_debug(
-    ticker: Optional[str] = Query(None),
-    limit: int = Query(10, le=100),
+@router.get("/diagnostics")
+async def rag_diagnostics(
+    vs: VectorStore = Depends(_get_vector_store),
+    retriever: HybridRetriever = Depends(_get_retriever),
 ):
-    """Show ChromaDB contents via search."""
-    vs = _get_vector_store()
-    total = vs.count()
-
-    if total == 0:
-        return {"total": 0, "by_ticker": {}, "by_source_type": {}, "sample": []}
-
-    try:
-        results = vs.search(
-            query="AI machine learning data infrastructure technology",
-            top_k=limit,
-            ticker=ticker,
-        )
-        docs = [
-            {
-                "id": r.doc_id,
-                "ticker": r.metadata.get("ticker"),
-                "source_type": r.metadata.get("source_type"),
-                "signal_category": r.metadata.get("signal_category"),
-                "dimension": r.metadata.get("dimension"),
-                "confidence": r.metadata.get("confidence"),
-                "content_preview": r.content[:200],
-            }
-            for r in results
-        ]
-        from collections import Counter
-        ticker_counts = Counter(r.metadata.get("ticker", "unknown") for r in results)
-        source_counts = Counter(r.metadata.get("source_type", "unknown") for r in results)
-        return {
-            "total": total,
-            "by_ticker": dict(ticker_counts),
-            "by_source_type": dict(source_counts),
-            "sample": docs,
-        }
-    except Exception as e:
-        return {"total": total, "error": str(e), "sample": []}
-
-
-@router.get("/debug/evidence/{ticker}")
-async def debug_evidence(ticker: str):
-    """Debug what cs2_client.get_evidence() returns."""
-    cs2 = CS2Client()
-    evidence = cs2.get_evidence(ticker=ticker)
+    """Full ChromaDB diagnostic: accurate per-company document counts."""
     from collections import Counter
-    by_cat = Counter(e.signal_category for e in evidence)
-    by_source = Counter(e.source_type for e in evidence)
+    total = vs.count()
+    if total == 0:
+        return {
+            "total_documents": 0,
+            "by_company": {},
+            "by_source_type": {},
+            "by_dimension": {},
+            "sparse_index": {
+                "sparse_index_size": retriever.sparse_index_size,
+                "bm25_initialized": retriever._bm25 is not None,
+            },
+        }
+
+    all_metas = vs.get_all_metadata()
+    by_company   = dict(Counter(m.get("ticker",      "unknown") for m in all_metas).most_common())
+    by_source    = dict(Counter(m.get("source_type", "unknown") for m in all_metas).most_common())
+    by_dimension = dict(Counter(m.get("dimension",   "unknown") for m in all_metas).most_common())
+
     return {
-        "total": len(evidence),
-        "by_signal_category": dict(by_cat),
-        "by_source_type": dict(by_source),
-        "sample_sec": [
-            {
-                "id": e.evidence_id,
-                "source": e.source_type,
-                "content": e.content[:150],
-            }
-            for e in evidence
-            if "sec" in e.source_type or "proxy" in e.source_type
-        ][:5],
+        "total_documents": total,
+        "by_company": by_company,
+        "by_source_type": by_source,
+        "by_dimension": by_dimension,
+        "sparse_index": {
+            "sparse_index_size": retriever.sparse_index_size,
+            "bm25_initialized": retriever._bm25 is not None,
+        },
     }
 
 
@@ -894,6 +833,11 @@ async def chatbot_query(
     question: str = Query(...),
     dimension: Optional[str] = Query(None),
     use_hyde: bool = Query(False),
+    retriever: HybridRetriever = Depends(_get_retriever),
+    vs: VectorStore = Depends(_get_vector_store),
+    llm_router: ModelRouter = Depends(_get_router),
+    scoring_repo=Depends(_get_scoring_repo),
+    signal_repo=Depends(_get_signal_repo),
 ):
     """
     Answer a question about a company using RAG.
@@ -905,23 +849,21 @@ async def chatbot_query(
     result = validate_ticker(ticker)
     if not result.passed:
         logger.warning("rag.guardrail_blocked", guard="validate_ticker", reason=result.reason)
-        raise HTTPException(status_code=400, detail=result.reason)
+        raise PlatformValidationError(result.reason)
 
     result = validate_question(question)
     if not result.passed:
         logger.warning("rag.guardrail_blocked", guard="validate_question", reason=result.reason)
-        raise HTTPException(status_code=400, detail=result.reason)
+        raise PlatformValidationError(result.reason)
 
     result = validate_dimension(dimension)
     if not result.passed:
         logger.warning("rag.guardrail_blocked", guard="validate_dimension", reason=result.reason)
-        raise HTTPException(status_code=400, detail=result.reason)
+        raise PlatformValidationError(result.reason)
 
     logger.info("rag.chatbot_query", ticker=ticker, question_len=len(question))
-    retriever = _get_retriever()
-    llm_router = _get_router()
 
-    detected_dimension = dimension
+    detected_dimension = DIMENSION_ALIAS_MAP.get(dimension, dimension) if dimension else dimension
     dim_confidence = 1.0
 
     if not detected_dimension:
@@ -941,19 +883,11 @@ async def chatbot_query(
             if llm_dim is not None:
                 detected_dimension = llm_dim
                 dim_confidence = llm_conf
-                logger.info(
-                    "rag.chatbot_used_llm_dim",
-                    ticker=ticker,
-                    dimension=detected_dimension,
-                    confidence=dim_confidence,
-                )
+                logger.info("rag.chatbot_used_llm_dim", ticker=ticker,
+                            dimension=detected_dimension, confidence=dim_confidence)
 
-    logger.info(
-        "rag.chatbot_dim_final",
-        ticker=ticker,
-        dimension=detected_dimension,
-        confidence=dim_confidence,
-    )
+    logger.info("rag.chatbot_dim_final", ticker=ticker, dimension=detected_dimension,
+                confidence=dim_confidence)
 
     results = await _retrieve_with_fallback(
         retriever=retriever,
@@ -963,6 +897,7 @@ async def chatbot_query(
         top_k=8,
         min_results=3,
         dim_confidence=dim_confidence,
+        vector_store=vs,
     )
 
     if not results:
@@ -1003,8 +938,6 @@ async def chatbot_query(
     score_context = ""
     try:
         # Dimension scores from evidence_dimension_scores table
-        from app.repositories.scoring_repository import get_scoring_repository
-        scoring_repo = get_scoring_repository()
         dim_rows = scoring_repo.get_dimension_scores(ticker)
         if dim_rows:
             score_lines = [
@@ -1018,9 +951,7 @@ async def chatbot_query(
 
     try:
         # Signal summary from company_signal_summaries table
-        from app.repositories.signal_repository import get_signal_repository
-        sig_repo = get_signal_repository()
-        summary = sig_repo.get_summary_by_ticker(ticker)
+        summary = signal_repo.get_summary_by_ticker(ticker)
         if summary:
             sig_lines = []
             for k, v in summary.items():
@@ -1037,7 +968,7 @@ async def chatbot_query(
 
     try:
         # Culture from S3
-        from app.services.culture_signal_service import get_culture_signal_service
+        from app.services.signals.culture_signal_service import get_culture_signal_service
         cult_svc = get_culture_signal_service()
         cult_data, _ = cult_svc.get(ticker)
         if cult_data and cult_data.get("overall_score"):
@@ -1096,11 +1027,15 @@ async def chatbot_query(
         logger.error("rag.chatbot_llm_error", ticker=ticker, error=str(e))
         answer = f"Evidence retrieved but could not generate answer: {e}"
 
+    logger.info("rag.chatbot_answer_generated", ticker=ticker, answer_len=len(answer),
+                sources_used=len(results))
+
     answer = check_no_refusal(answer)
     answer = check_answer_grounded(answer, results_sorted[:4])
     length_result = check_answer_length(answer)
     if not length_result.passed:
-        logger.warning("rag.guardrail_blocked", guard="check_answer_length", reason=length_result.reason)
+        logger.warning("rag.guardrail_blocked", guard="check_answer_length",
+                       reason=length_result.reason)
         answer = f"[Guard: answer quality check failed — {length_result.reason}]"
 
     return {

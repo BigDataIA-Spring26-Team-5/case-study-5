@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from typing import List
 import logging
 from app.models.document import (
@@ -8,15 +8,17 @@ from app.models.document import (
     ParseByTickerResponse,
     ParseAllResponse,
 )
-from app.services.document_collector import get_document_collector_service
-from app.services.document_parsing_service import get_document_parsing_service
-from app.services.document_chunking_service import get_document_chunking_service
+from app.core.dependencies import (
+    get_document_collector_service,
+    get_document_parsing_service,
+    get_document_chunking_service,
+)
+from app.core.errors import PlatformError, ExternalServiceError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/documents",
-    # tags=["Documents"],
 )
 
 
@@ -41,17 +43,19 @@ router = APIRouter(
     **Filing Types:** 10-K, 10-Q, 8-K, DEF 14A
     """
 )
-async def collect_documents(request: DocumentCollectionRequest):
+async def collect_documents(
+    request: DocumentCollectionRequest,
+    service=Depends(get_document_collector_service),
+):
     """Collect SEC filings for a company"""
     logger.info(f"Collection request for: {request.ticker}")
     try:
-        service = get_document_collector_service()
         return service.collect_for_company(request)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except PlatformError:
+        raise
     except Exception as e:
         logger.error(f"Collection failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ExternalServiceError("document_collection", "Failed to collect SEC filings.")
 
 
 @router.post(
@@ -64,15 +68,16 @@ async def collect_all_documents(
     filing_types: List[FilingType] = Query(
         default=[FilingType.FORM_10K, FilingType.FORM_10Q, FilingType.FORM_8K, FilingType.DEF_14A]
     ),
-    years_back: int = Query(default=3, ge=1, le=10)
+    years_back: int = Query(default=3, ge=1, le=10),
+    service=Depends(get_document_collector_service),
 ):
     """Collect documents for all 10 target companies"""
     logger.info("Batch collection for all companies")
     try:
-        service = get_document_collector_service()
         return service.collect_for_all_companies([ft.value for ft in filing_types], years_back)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Batch collection failed: {e}")
+        raise ExternalServiceError("document_collection", "Failed to collect SEC filings for all companies.")
 
 
 
@@ -95,16 +100,19 @@ async def collect_all_documents(
     5. Updates word_count in Snowflake
     """
 )
-async def parse_documents_by_ticker(ticker: str):
+async def parse_documents_by_ticker(
+    ticker: str,
+    service=Depends(get_document_parsing_service),
+):
     """Parse all documents for a company"""
     logger.info(f"Parse request for: {ticker}")
     try:
-        service = get_document_parsing_service()
         return service.parse_by_ticker(ticker)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except PlatformError:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Parse failed for {ticker}: {e}")
+        raise ExternalServiceError("document_parsing", "Failed to parse documents.")
 
 
 @router.post(
@@ -113,14 +121,16 @@ async def parse_documents_by_ticker(ticker: str):
     tags=["2. Parsing"],
     summary="Parse documents for all companies"
 )
-async def parse_all_documents():
+async def parse_all_documents(
+    service=Depends(get_document_parsing_service),
+):
     """Parse documents for all 10 target companies"""
     logger.info("Batch parsing for all companies")
     try:
-        service = get_document_parsing_service()
         return service.parse_all_companies()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Batch parsing failed: {e}")
+        raise ExternalServiceError("document_parsing", "Failed to parse documents for all companies.")
 
 
 
@@ -148,17 +158,18 @@ async def parse_all_documents():
 async def chunk_documents_by_ticker(
     ticker: str,
     chunk_size: int = Query(default=750, ge=100, le=2000, description="Words per chunk"),
-    chunk_overlap: int = Query(default=50, ge=0, le=200, description="Overlap between chunks")
+    chunk_overlap: int = Query(default=50, ge=0, le=200, description="Overlap between chunks"),
+    service=Depends(get_document_chunking_service),
 ):
     """Chunk all parsed documents for a company"""
     logger.info(f"Chunk request for: {ticker}")
     try:
-        service = get_document_chunking_service()
         return service.chunk_by_ticker(ticker, chunk_size, chunk_overlap)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except PlatformError:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Chunk failed for {ticker}: {e}")
+        raise ExternalServiceError("document_chunking", "Failed to chunk documents.")
 
 
 @router.post(
@@ -168,12 +179,13 @@ async def chunk_documents_by_ticker(
 )
 async def chunk_all_documents(
     chunk_size: int = Query(default=750, ge=100, le=2000),
-    chunk_overlap: int = Query(default=50, ge=0, le=200)
+    chunk_overlap: int = Query(default=50, ge=0, le=200),
+    service=Depends(get_document_chunking_service),
 ):
     """Chunk documents for all 10 target companies"""
     logger.info("Batch chunking for all companies")
     try:
-        service = get_document_chunking_service()
         return service.chunk_all_companies(chunk_size, chunk_overlap)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Batch chunking failed: {e}")
+        raise ExternalServiceError("document_chunking", "Failed to chunk documents for all companies.")

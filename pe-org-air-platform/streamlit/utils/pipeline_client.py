@@ -1,20 +1,20 @@
 """
 Pipeline Client — streamlit/utils/pipeline_client.py
 
-Step order (9 steps, all synchronous):
+Step order (9 steps):
   1. Company Setup          POST /api/v1/companies
   2. SEC Filings            POST /api/v1/documents/collect
   3. Parse Documents        POST /api/v1/documents/parse/{ticker}       NON-FATAL
   4. Chunk Documents        POST /api/v1/documents/chunk/{ticker}       NON-FATAL
-  5. Signal Scoring         POST /api/v1/signals/score/{ticker}/all     SYNC/FATAL
-  6. Glassdoor Culture      POST /api/v1/glassdoor-signals/{ticker}     NON-FATAL
-  7. Board Governance       POST /api/v1/board-governance/analyze/{ticker} NON-FATAL
+  5. Signal Scoring         POST /api/v1/signals/collect + poll          ALL 6 CATEGORIES
+  6. Glassdoor Culture      (included in Step 5)
+  7. Board Governance       (included in Step 5)
   8. Scoring                POST /api/v1/scoring/{ticker}               FATAL
   9. Index Evidence         POST /rag/index/{ticker}?force=true         NON-FATAL
 
-KEY FIX: Step 5 uses /signals/score/{ticker}/all (synchronous, blocks until all 4
-signals complete) instead of /signals/collect (async fire-and-forget).
-Steps 6+7 run BEFORE Step 8 so Glassdoor/board S3 files exist when CS3 reads them.
+Step 5 uses POST /api/v1/signals/collect which runs all 6 signal categories
+(hiring, digital, patents, leadership, board, culture) as a background task,
+then polls /signals/tasks/{task_id} until complete.
 
 WEBSITE FIX: resolved.website is now threaded through to the digital_presence
 signal endpoint so BuiltWith/Wappalyzer use the real yfinance-resolved domain
@@ -118,7 +118,7 @@ class PipelineClient:
         }
         try:
             resp = self._session.get(
-                f"{self.base_url}/rag/debug",
+                f"{self.base_url}/api/v1/rag/debug",
                 params={"ticker": ticker, "limit": 5},
                 timeout=REQUEST_TIMEOUT_SHORT,
             )
@@ -132,7 +132,7 @@ class PipelineClient:
                 elif total > 0:
                     try:
                         check = self._session.get(
-                            f"{self.base_url}/rag/chatbot/{ticker}",
+                            f"{self.base_url}/api/v1/rag/chatbot/{ticker}",
                             params={"question": "test"},
                             timeout=10,
                         )
@@ -538,6 +538,26 @@ severity guide:
 
     # ── Step 5 — Signal Scoring ───────────────────────────────────────────────
 
+    def _poll_signal_task(self, task_id: str, timeout: int = REQUEST_TIMEOUT_LONG) -> Dict[str, Any]:
+        """Poll /signals/tasks/{task_id} until completed or timeout."""
+        deadline = time.time() + timeout
+        poll_interval = 3
+        while time.time() < deadline:
+            try:
+                resp = self._session.get(
+                    f"{self.base_url}/api/v1/signals/tasks/{task_id}",
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    status = data.get("status", "")
+                    if status in ("completed", "completed_with_errors", "failed"):
+                        return data
+            except Exception as e:
+                logger.warning(f"Poll failed for task {task_id}: {e}")
+            time.sleep(poll_interval)
+        return {"status": "timeout", "error": "Signal collection timed out"}
+
     def _step_signal_scoring(
         self,
         ticker: str,
@@ -547,120 +567,70 @@ severity guide:
         website: Optional[str] = None,
     ) -> PipelineStepResult:
         """
-        Selective per-signal scoring with LLM sanity check.
+        Trigger all signal collection via POST /api/v1/signals/collect and poll for completion.
 
-        Per-signal skip logic:
-          scored today AND score > 0  →  skip
-          score == 0 OR None          →  re-run
-          not scored today            →  re-run
-
-        website is passed as a query param to the digital_presence endpoint so
-        BuiltWith/Wappalyzer scan the correct domain (e.g. alphabet.com for GOOGL).
-
-        NOTE: on_substep is always None when called from the concurrent block in
-        run_pipeline — Streamlit UI cannot be called from background threads.
-        Sub-step progress during full pipeline runs is a known UX limitation.
+        All 6 categories (hiring, digital, patents, leadership, board, culture)
+        run as a single background task on the server.
         """
         start = time.time()
 
-        signal_status = self._get_signal_scores_today(ticker) if skip_if_scored_today else {
-            cat: {"score": None, "raw_value": None, "scored_today": False, "should_skip": False}
-            for cat in ["technology_hiring", "digital_presence", "innovation_activity", "leadership_signals"]
-        }
+        ALL_CATEGORIES = [
+            "technology_hiring", "digital_presence", "innovation_activity",
+            "leadership_signals", "board_composition", "culture",
+        ]
 
-        to_skip = [cat for cat, s in signal_status.items() if s["should_skip"]]
-        to_run  = [cat for cat, s in signal_status.items() if not s["should_skip"]]
-
-        INDIVIDUAL_ENDPOINTS = {
-            "technology_hiring":   f"/api/v1/signals/score/{ticker}/hiring",
-            "digital_presence":    f"/api/v1/signals/score/{ticker}/digital",
-            "innovation_activity": f"/api/v1/signals/score/{ticker}/innovation",
-            "leadership_signals":  f"/api/v1/signals/score/{ticker}/leadership",
-        }
-        CATEGORY_LABELS = {
-            "technology_hiring":   "Job postings (LinkedIn / Indeed)...",
-            "digital_presence":    "Digital presence (BuiltWith / Wappalyzer)...",
-            "innovation_activity": "Patents (USPTO)...",
-            "leadership_signals":  "Leadership signals (DEF 14A)...",
-        }
-
-        if to_skip:
-            logger.info(f"[{ticker}] Skipping signals (scored today, score > 0): {to_skip}")
-        if to_run:
-            logger.info(f"[{ticker}] Re-running signals (zero/missing/stale): {to_run}")
+        # Submit collection request
+        try:
+            resp = self._session.post(
+                f"{self.base_url}/api/v1/signals/collect",
+                json={
+                    "company_id": ticker,
+                    "categories": ALL_CATEGORIES,
+                    "force_refresh": not skip_if_scored_today,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            task_id = resp.json().get("task_id")
+        except Exception as e:
+            return PipelineStepResult(
+                step=5, name="Signal Scoring", status="error",
+                message=f"Failed to start signal collection: {e}",
+                error=str(e), duration_seconds=time.time() - start,
+            )
 
         if on_substep:
-            for cat in to_skip:
-                on_substep(f"⏭️  {CATEGORY_LABELS[cat]} (skipped — scored today)")
-            for cat in to_run:
-                on_substep(f"Scoring {CATEGORY_LABELS[cat]}")
+            on_substep(f"Signal collection queued (task: {task_id}), polling...")
 
-        fresh_results: Dict[str, Any] = {}
+        # Poll until done
+        task_result = self._poll_signal_task(task_id)
+        task_status = task_result.get("status", "unknown")
+        signals = task_result.get("result", {}).get("signals", {})
+        errors = task_result.get("result", {}).get("errors", [])
 
-        def _call_signal(cat: str) -> tuple[str, Any]:
-            endpoint = INDIVIDUAL_ENDPOINTS[cat]
-            s = requests.Session()
-            s.headers.update({"Content-Type": "application/json"})
-            try:
-                params = {}
-                if cat == "digital_presence" and website:
-                    params["website"] = website
-
-                resp = s.post(
-                    f"{self.base_url}{endpoint}",
-                    params=params,
-                    timeout=REQUEST_TIMEOUT_LONG,
-                )
-                resp.raise_for_status()
-                return cat, resp.json()
-            except Exception as e:
-                logger.error(f"[{ticker}] Signal endpoint {endpoint} failed: {e}")
-                return cat, {"status": "failed", "error": str(e), "score": None}
-            finally:
-                s.close()
-
-        if to_run:
-            with ThreadPoolExecutor(max_workers=len(to_run)) as pool:
-                futures = {pool.submit(_call_signal, cat): cat for cat in to_run}
-                for future in as_completed(futures):
-                    cat, result = future.result()
-                    fresh_results[cat] = result
-
-        merged: Dict[str, Any] = {}
-
-        for cat in to_skip:
-            merged[cat] = {
-                "score":     signal_status[cat]["score"],
-                "raw_value": signal_status[cat]["raw_value"],
-                "source":    "skipped",
-            }
-
-        for cat in to_run:
-            r = fresh_results.get(cat, {})
-            score = r.get("score") or r.get("normalized_score")
-            merged[cat] = {
-                "score":     score,
-                "raw_value": r.get("raw_value"),
-                "source":    "failed" if r.get("status") == "failed" else "fresh",
-            }
-
+        # Build summary
         parts = []
-        for cat, info in merged.items():
-            score  = info["score"]
-            source = info["source"]
-            label  = cat.replace("_", " ")
-            if source == "skipped":
-                parts.append(f"{label}: {score:.1f} (skipped)")
-            elif source == "failed":
+        merged: Dict[str, Any] = {}
+        for cat in ALL_CATEGORIES:
+            sig = signals.get(cat, {})
+            score = sig.get("score")
+            status = sig.get("status", "missing")
+            merged[cat] = {
+                "score": score,
+                "raw_value": sig.get("details", {}).get("raw_value") if sig.get("details") else None,
+                "source": status,
+            }
+            label = cat.replace("_", " ")
+            if status == "success" and score is not None:
+                parts.append(f"{label}: {score:.1f}")
+            elif status == "failed":
                 parts.append(f"{label}: FAILED")
             else:
-                score_str = f"{score:.1f}" if score is not None else "?"
-                parts.append(f"{label}: {score_str}")
+                parts.append(f"{label}: --")
 
         summary_msg = " | ".join(parts) if parts else "signals processed"
 
         flags = self._sanity_check_scores(ticker, company_name or ticker, merged)
-
         if flags:
             flag_summary = ", ".join(
                 f"{f.category} ({f.score}/100, severity={f.severity})" for f in flags
@@ -670,12 +640,14 @@ severity guide:
 
         failed = [cat for cat, info in merged.items() if info["source"] == "failed"]
         if failed:
-            logger.warning(f"[{ticker}] Signals failed (will score with partial data): {failed}")
+            logger.warning(f"[{ticker}] Signals failed: {failed}")
+
+        overall_status = "success" if task_status in ("completed",) else "error" if task_status == "failed" else "success"
 
         return PipelineStepResult(
-            step=5, name="Signal Scoring", status="success",
+            step=5, name="Signal Scoring", status=overall_status,
             message=summary_msg,
-            data={"signal_results": merged, "skipped": to_skip, "ran": to_run, "failed": failed},
+            data={"signal_results": merged, "failed": failed, "task_id": task_id},
             duration_seconds=time.time() - start,
             signal_flags=flags,
         )
@@ -799,69 +771,25 @@ severity guide:
                 error=str(e), duration_seconds=time.time() - start,
             )
 
-    # ── Step 6 — Glassdoor Culture (NON-FATAL) ────────────────────────────────
+    # ── Step 6 — Glassdoor Culture (handled by unified /signals/collect) ─────
 
     def _step_glassdoor(self, ticker: str) -> PipelineStepResult:
-        start = time.time()
-        try:
-            resp = self._session.post(
-                f"{self.base_url}/api/v1/glassdoor-signals/{ticker}",
-                timeout=REQUEST_TIMEOUT_LONG,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            score   = data.get("culture_score", data.get("score", "?"))
-            reviews = data.get("reviews_analyzed", data.get("total_reviews", "?"))
-            return PipelineStepResult(
-                step=6, name="Glassdoor Culture", status="success",
-                message=f"Culture score: {score} | Reviews analyzed: {reviews}",
-                data=data, duration_seconds=time.time() - start,
-            )
-        except requests.HTTPError as e:
-            return PipelineStepResult(
-                step=6, name="Glassdoor Culture", status="error",
-                message="Glassdoor scraping failed — culture_change score may be lower",
-                error=f"HTTP {e.response.status_code}: {e.response.text[:200]}",
-                duration_seconds=time.time() - start,
-            )
-        except Exception as e:
-            return PipelineStepResult(
-                step=6, name="Glassdoor Culture", status="error",
-                message="Glassdoor scraping failed — culture_change score may be lower",
-                error=str(e), duration_seconds=time.time() - start,
-            )
+        """No-op: culture signals are now collected in Step 5 via /signals/collect."""
+        return PipelineStepResult(
+            step=6, name="Glassdoor Culture", status="success",
+            message="Included in unified signal collection (Step 5)",
+            duration_seconds=0.0,
+        )
 
-    # ── Step 7 — Board Governance (NON-FATAL) ─────────────────────────────────
+    # ── Step 7 — Board Governance (handled by unified /signals/collect) ──────
 
     def _step_board_governance(self, ticker: str) -> PipelineStepResult:
-        start = time.time()
-        try:
-            resp = self._session.post(
-                f"{self.base_url}/api/v1/board-governance/analyze/{ticker}",
-                timeout=REQUEST_TIMEOUT_LONG,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            score   = data.get("governance_score", data.get("score", "?"))
-            members = data.get("board_members_analyzed", data.get("total_members", "?"))
-            return PipelineStepResult(
-                step=7, name="Board Governance", status="success",
-                message=f"Governance score: {score} | Board members: {members}",
-                data=data, duration_seconds=time.time() - start,
-            )
-        except requests.HTTPError as e:
-            return PipelineStepResult(
-                step=7, name="Board Governance", status="error",
-                message="Board governance failed — board_composition may be missing",
-                error=f"HTTP {e.response.status_code}: {e.response.text[:200]}",
-                duration_seconds=time.time() - start,
-            )
-        except Exception as e:
-            return PipelineStepResult(
-                step=7, name="Board Governance", status="error",
-                message="Board governance failed — board_composition may be missing",
-                error=str(e), duration_seconds=time.time() - start,
-            )
+        """No-op: board governance signals are now collected in Step 5 via /signals/collect."""
+        return PipelineStepResult(
+            step=7, name="Board Governance", status="success",
+            message="Included in unified signal collection (Step 5)",
+            duration_seconds=0.0,
+        )
 
     # ── Step 8 — CS3 Scoring ──────────────────────────────────────────────────
 
@@ -902,7 +830,7 @@ severity guide:
         start = time.time()
         try:
             resp = self._session.post(
-                f"{self.base_url}/rag/index/{ticker}",
+                f"{self.base_url}/api/v1/rag/index/{ticker}",
                 params={"force": str(force).lower()},
                 timeout=REQUEST_TIMEOUT_LONG,
             )
@@ -1139,7 +1067,7 @@ severity guide:
             params["dimension"] = dimension
         try:
             resp = self._session.get(
-                f"{self.base_url}/rag/chatbot/{ticker}",
+                f"{self.base_url}/api/v1/rag/chatbot/{ticker}",
                 params=params, timeout=REQUEST_TIMEOUT_SHORT,
             )
             resp.raise_for_status()
@@ -1151,7 +1079,7 @@ severity guide:
 
     def get_ic_prep(self, ticker: str) -> Dict[str, Any]:
         try:
-            resp = self._session.get(f"{self.base_url}/rag/ic-prep/{ticker}", timeout=REQUEST_TIMEOUT_LONG)
+            resp = self._session.get(f"{self.base_url}/api/v1/rag/ic-prep/{ticker}", timeout=REQUEST_TIMEOUT_LONG)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -1159,7 +1087,7 @@ severity guide:
 
     def get_justification(self, ticker: str, dimension: str) -> Dict[str, Any]:
         try:
-            resp = self._session.get(f"{self.base_url}/rag/justify/{ticker}/{dimension}", timeout=REQUEST_TIMEOUT_SHORT)
+            resp = self._session.get(f"{self.base_url}/api/v1/rag/justify/{ticker}/{dimension}", timeout=REQUEST_TIMEOUT_SHORT)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -1167,7 +1095,7 @@ severity guide:
 
     def get_rag_status(self) -> Dict[str, Any]:
         try:
-            resp = self._session.get(f"{self.base_url}/rag/status", timeout=REQUEST_TIMEOUT_SHORT)
+            resp = self._session.get(f"{self.base_url}/api/v1/rag/status", timeout=REQUEST_TIMEOUT_SHORT)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

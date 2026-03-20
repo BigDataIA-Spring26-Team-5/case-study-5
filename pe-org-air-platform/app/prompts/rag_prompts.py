@@ -12,8 +12,8 @@ HYDE_SYSTEM = "You write realistic financial document excerpts."
 
 HYDE_TEMPLATE = """You are an expert private equity analyst specializing in AI readiness assessment.
 
-Write a detailed passage (150–200 words) that would appear in a {source_type} for a company
-scoring at Level 4 ("Good", 60–79) on the '{dimension}' dimension of AI readiness.
+Write a detailed passage (150-200 words) that would appear in a {source_type} for a company
+scoring at Level 4 ("Good", 60-79) on the '{dimension}' dimension of AI readiness.
 
 Company context: {company_context}
 

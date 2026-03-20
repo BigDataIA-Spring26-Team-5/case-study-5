@@ -27,10 +27,10 @@ from typing import Dict, List
 from app.services.document_collector import get_document_collector_service
 from app.services.document_parsing_service import get_document_parsing_service
 from app.services.document_chunking_service import get_document_chunking_service
-from app.services.job_signal_service import get_job_signal_service
-from app.services.patent_signal_service import get_patent_signal_service
-from app.services.tech_signal_service import get_tech_signal_service
-from app.services.leadership_service import get_leadership_service
+from app.services.signals.job_signal_service import get_job_signal_service
+from app.services.signals.patent_signal_service import get_patent_signal_service
+from app.services.signals.tech_signal_service import get_tech_signal_service
+from app.services.signals.leadership_service import get_leadership_service
 from app.repositories.company_repository import CompanyRepository
 from app.models.document import DocumentCollectionRequest
 

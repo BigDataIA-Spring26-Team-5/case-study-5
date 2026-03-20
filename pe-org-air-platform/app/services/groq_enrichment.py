@@ -11,10 +11,11 @@ Set GROQ_API_KEY in the environment before use.
 
 import json
 import logging
-import os
 from typing import Dict, List, Optional
 
 import httpx
+
+from app.core.errors import ExternalServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +26,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _kw_cache: Dict[str, List[str]] = {}
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+from app.core.settings import settings as _settings
+
+GROQ_API_URL = _settings.GROQ_API_URL
 GROQ_MODEL = "llama-3.1-8b-instant"
 
 
 def _get_api_key() -> str:
-    key = os.getenv("GROQ_API_KEY", "")
+    key = _settings.GROQ_API_KEY.get_secret_value() if _settings.GROQ_API_KEY else ""
     if not key:
-        raise RuntimeError("GROQ_API_KEY environment variable is not set")
+        raise ExternalServiceError("groq", "GROQ_API_KEY is not configured")
     return key
 
 

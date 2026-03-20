@@ -105,31 +105,16 @@ def reingest_company(ticker: str, dry_run: bool = False, years_back: int = 3):
             total_chunks_created += len(chunks)
             continue
 
-        # ── S3 and Snowflake: use libraries directly to avoid circular imports ──
-        import boto3
-        import snowflake.connector
-        from app.config import settings
+        # ── S3 and Snowflake via centralized factories ──
+        from app.services.s3_storage import get_s3_service
+        from app.repositories.base import get_snowflake_connection
+        from app.core.settings import settings
 
-        # Handle Pydantic SecretStr fields
-        def _secret(val):
-            return val.get_secret_value() if hasattr(val, 'get_secret_value') else str(val)
-
-        s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=_secret(settings.AWS_ACCESS_KEY_ID),
-            aws_secret_access_key=_secret(settings.AWS_SECRET_ACCESS_KEY),
-            region_name=getattr(settings, "AWS_REGION", "us-east-2"),
-        )
+        s3_service = get_s3_service()
+        s3_client = s3_service.s3_client
         bucket = settings.S3_BUCKET
 
-        conn = snowflake.connector.connect(
-            user=settings.SNOWFLAKE_USER,
-            password=_secret(settings.SNOWFLAKE_PASSWORD),
-            account=settings.SNOWFLAKE_ACCOUNT,
-            warehouse=settings.SNOWFLAKE_WAREHOUSE,
-            database=settings.SNOWFLAKE_DATABASE,
-            schema=settings.SNOWFLAKE_SCHEMA,
-        )
+        conn = get_snowflake_connection()
 
         # Get company_id from DB
         cur = conn.cursor()
@@ -212,7 +197,7 @@ def reingest_company(ticker: str, dry_run: bool = False, years_back: int = 3):
             logger.error(f"   ❌ Snowflake update failed: {e}")
             try:
                 conn.rollback()
-            except:
+            except Exception:
                 pass
         finally:
             cur.close()

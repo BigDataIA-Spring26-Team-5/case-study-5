@@ -1,14 +1,13 @@
 #app/pipelines/sec_edgar.py
-import os
 import time
-import logging
+import structlog
 import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Generator
 from dataclasses import dataclass
-from app.config import settings
+from app.core.settings import settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 @dataclass
 class SECFiling:

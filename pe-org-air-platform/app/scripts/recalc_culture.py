@@ -22,28 +22,20 @@ logger = logging.getLogger(__name__)
 
 def recalc_company(ticker: str, dry_run: bool = False):
     """Recalculate culture signal for a company from existing S3 raw reviews."""
-    import boto3
-    from app.config import settings
+    from app.services.s3_storage import get_s3_service
+    from app.core.settings import settings
     from app.pipelines.glassdoor_collector import CultureCollector, CultureReview, _normalize_date
 
     ticker = ticker.upper()
 
-    def _secret(val):
-        return val.get_secret_value() if hasattr(val, 'get_secret_value') else str(val)
-
-    # Direct S3 access
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=_secret(settings.AWS_ACCESS_KEY_ID),
-        aws_secret_access_key=_secret(settings.AWS_SECRET_ACCESS_KEY),
-        region_name=getattr(settings, "AWS_REGION", "us-east-2"),
-    )
+    s3_service = get_s3_service()
+    s3 = s3_service.s3_client
     bucket = settings.S3_BUCKET
 
     # Find latest raw reviews file
     prefix = f"glassdoor_signals/raw/{ticker}/"
-    resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
-    keys = [obj["Key"] for obj in resp.get("Contents", []) if obj["Key"].endswith("_raw.json")]
+    all_keys = s3_service.list_files(prefix)
+    keys = [k for k in all_keys if k.endswith("_raw.json")]
 
     if not keys:
         logger.error(f"[{ticker}] No raw review files found in S3 under {prefix}")

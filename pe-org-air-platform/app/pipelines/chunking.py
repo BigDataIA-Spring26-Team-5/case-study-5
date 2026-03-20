@@ -1,13 +1,8 @@
-import logging
+import structlog
 from typing import List, Optional
 from dataclasses import dataclass, asdict
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 @dataclass

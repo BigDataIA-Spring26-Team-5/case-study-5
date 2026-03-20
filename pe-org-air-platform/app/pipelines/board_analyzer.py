@@ -5,8 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
-from multiprocessing import context
+import structlog
 from multiprocessing import context
 import re
 import time
@@ -15,13 +14,12 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
-
 from app.services.s3_storage import S3StorageService, get_s3_service
-from app.repositories.document_repository import DocumentRepository, get_document_repository
+from app.repositories.document_repository import DocumentRepository
+from app.config.company_mappings import CompanyRegistry
+from app.pipelines.board_io import ProxyData, load_proxy_data
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-logger = logging.getLogger("board_analyzer")
+logger = structlog.get_logger()
 
 D = Decimal
 
@@ -52,132 +50,6 @@ class GovernanceSignal:
     ai_experts: List[str] = field(default_factory=list)
     relevant_committees: List[str] = field(default_factory=list)
     board_members: List[dict] = field(default_factory=list)
-
-@dataclass
-class ProxyData:
-    text_content: str
-    tables: List[dict]
-    ticker: str
-
-# ── Company Registry ─────────────────────────────────────────
-
-class CompanyRegistry:
-    COMPANIES: Dict[str, Dict] = {
-        "NVDA": {"cik": "0001045810", "name": "NVIDIA Corporation", "sector": "technology"},
-        "JPM":  {"cik": "0000019617", "name": "JPMorgan Chase & Co.", "sector": "financial_services"},
-        "WMT":  {"cik": "0000104169", "name": "Walmart Inc.", "sector": "retail"},
-        "GE":   {"cik": "0000040545", "name": "GE Aerospace", "sector": "manufacturing"},
-        "DG":   {"cik": "0000029534", "name": "Dollar General Corporation", "sector": "retail"},
-    }
-
-    @classmethod
-    def get(cls, ticker: str) -> Dict:
-        t = ticker.upper()
-        if t in cls.COMPANIES:
-            return cls.COMPANIES[t]
-        raise ValueError(f"Unknown ticker '{ticker}'.")
-
-    @classmethod
-    def register(cls, ticker: str, cik: str, name: str, sector: str = "unknown"):
-        cls.COMPANIES[ticker.upper()] = {"cik": cik, "name": name, "sector": sector}
-
-    @classmethod
-    def all_tickers(cls) -> List[str]:
-        return list(cls.COMPANIES.keys())
-
-# ── S3 / EDGAR Loader ────────────────────────────────────────
-
-SEC_HEADERS = {
-    "User-Agent": "OrgAIR-Scoring-Engine cs3-lab@quantuniversity.com",
-    "Accept-Encoding": "gzip, deflate",
-}
-EDGAR_DELAY = 0.5
-
-def _load_s3_json(s3: S3StorageService, key: str) -> Optional[dict]:
-    data = s3.get_file(key)
-    if not data:
-        return None
-    try:
-        return json.loads(data.decode("utf-8", errors="ignore"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
-
-def _find_s3_parsed_keys(ticker: str, s3: S3StorageService) -> List[str]:
-    for prefix in [f"sec/parsed/{ticker}/DEF14A/", f"sec/parsed/{ticker}/DEF 14A/"]:
-        keys = s3.list_files(prefix)
-        if keys:
-            return keys
-    return []
-
-def _load_proxy_from_s3(ticker: str, s3: S3StorageService, doc_repo: DocumentRepository) -> Optional[ProxyData]:
-    ticker = ticker.upper()
-    parsed_keys = _find_s3_parsed_keys(ticker, s3)
-    text_content = ""
-    tables: List[dict] = []
-    if parsed_keys:
-        for key in sorted([k for k in parsed_keys if "_full" in k], reverse=True):
-            logger.info(f"[{ticker}] Loading text from S3: {key}")
-            data = _load_s3_json(s3, key)
-            if data and data.get("text_content"):
-                text_content = data["text_content"]
-                if data.get("tables"):
-                    tables = data["tables"]
-                break
-        for key in sorted([k for k in parsed_keys if "_tables" in k], reverse=True):
-            logger.info(f"[{ticker}] Loading tables from S3: {key}")
-            data = _load_s3_json(s3, key)
-            if data:
-                if isinstance(data, list):
-                    tables = data
-                elif isinstance(data, dict) and data.get("tables"):
-                    tables = data["tables"]
-                break
-    if not text_content:
-        docs = doc_repo.get_by_ticker(ticker)
-        proxy_docs = [d for d in docs if d.get("filing_type") in ("DEF 14A", "DEF14A") and d.get("s3_key")]
-        if proxy_docs:
-            raw_key = proxy_docs[0]["s3_key"]
-            logger.info(f"[{ticker}] Loading raw proxy HTML from S3: {raw_key}")
-            raw = s3.get_file(raw_key)
-            if raw:
-                text_content = strip_html(raw.decode("utf-8", errors="ignore"))
-    if not text_content:
-        return None
-    return ProxyData(text_content=text_content, tables=tables, ticker=ticker)
-
-def _fetch_from_edgar(ticker: str, timeout: float = 30.0) -> ProxyData:
-    info = CompanyRegistry.get(ticker)
-    cik = info["cik"].lstrip("0")
-    logger.info(f"[{ticker}] EDGAR fallback")
-    url = f"https://data.sec.gov/submissions/CIK{info['cik']}.json"
-    time.sleep(EDGAR_DELAY)
-    resp = httpx.get(url, headers=SEC_HEADERS, timeout=timeout)
-    resp.raise_for_status()
-    filings = resp.json().get("filings", {}).get("recent", {})
-    for i, form in enumerate(filings.get("form", [])):
-        if form == "DEF 14A":
-            acc = filings["accessionNumber"][i].replace("-", "")
-            doc = filings["primaryDocument"][i]
-            doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
-            time.sleep(EDGAR_DELAY)
-            r = httpx.get(doc_url, headers=SEC_HEADERS, timeout=timeout, follow_redirects=True)
-            r.raise_for_status()
-            return ProxyData(text_content=strip_html(r.text), tables=[], ticker=ticker)
-    raise RuntimeError(f"[{ticker}] No DEF 14A found in EDGAR")
-
-def load_proxy_data(ticker: str, s3: Optional[S3StorageService] = None, doc_repo: Optional[DocumentRepository] = None, use_s3: bool = True) -> ProxyData:
-    ticker = ticker.upper()
-    if use_s3:
-        try:
-            s3 = s3 or get_s3_service()
-            doc_repo = doc_repo or get_document_repository()
-            proxy = _load_proxy_from_s3(ticker, s3, doc_repo)
-            if proxy and len(proxy.text_content) > 500:
-                logger.info(f"[{ticker}] Loaded: {len(proxy.text_content):,} chars, {len(proxy.tables)} tables")
-                return proxy
-        except Exception as e:
-            logger.warning(f"[{ticker}] S3 load failed: {e}")
-    return _fetch_from_edgar(ticker)
 
 # ── Text Helpers ─────────────────────────────────────────────
 
@@ -220,14 +92,6 @@ _COMMITTEE_PAT = re.compile(
 )
 _AGE_PAT = re.compile(r'Age\s*:?\s*(\d{2})', re.I)
 _SINCE_PAT = re.compile(r'(?:Director\s+[Ss]ince|Joined\s+the\s+Board)\s*:?\s*(\d{4})', re.I)
-
-def strip_html(html: str) -> str:
-    t = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.I | re.DOTALL)
-    t = re.sub(r"<style[^>]*>.*?</style>", " ", t, flags=re.I | re.DOTALL)
-    t = re.sub(r"<[^>]+>", " ", t)
-    t = re.sub(r"&nbsp;|&amp;|&quot;|&apos;|&lt;|&gt;", " ", t)
-    t = re.sub(r"&#\d+;", " ", t)
-    return re.sub(r"\s+", " ", t).strip()
 
 def _strip_zwsp(text: str) -> str:
     return text.replace(_ZWSP, "").replace("\u00a0", " ").strip()
@@ -1243,7 +1107,6 @@ class BoardCompositionAnalyzer:
             """Clear extraction context after analysis."""
             self._extraction_context = None
 
-    # def analyze_board(self, company_id: str, ticker: str, members: List[BoardMember], committees: List[str], strategy_text: str = "") -> GovernanceSignal:
     def analyze_board(self, company_id: str, ticker: str, members: List[BoardMember], committees: List[str], strategy_text: str = "", full_proxy_text: str = "") -> GovernanceSignal:
         score = D("20")
         relevant_comms: List[str] = []
@@ -1266,16 +1129,6 @@ class BoardCompositionAnalyzer:
             score += D("20")
         trail["ai_expertise"] = {"points": 20 if has_ai else 0, "max_points": 20, "triggered": has_ai, "expert_count": len(ai_experts)}
 
-        # has_officer = False
-        # for m in members:
-        #     combined = (m.title + " " + m.bio).lower()
-        #     if any(dt in combined for dt in self.DATA_OFFICER_TITLES):
-        #         if any(w in combined for w in ["chief", "officer", "vp", "svp", "head", "president"]):
-        #             has_officer = True
-        #             break
-        # if has_officer:
-        #     score += D("15")
-
         has_officer = False
         for m in members:
             combined = (m.title + " " + m.bio).lower()
@@ -1283,17 +1136,6 @@ class BoardCompositionAnalyzer:
                 if any(w in combined for w in ["chief", "officer", "vp", "svp", "head", "president"]):
                     has_officer = True
                     break
-        # # Also search proxy/strategy text for exec officer titles
-        # # (CTO, CDO etc. are executive officers, not always board members)
-        # if not has_officer and strategy_text:
-        #     proxy_lower = strategy_text.lower()
-        #     for dt in self.DATA_OFFICER_TITLES:
-        #         if dt in proxy_lower:
-        #             idx = proxy_lower.find(dt)
-        #             context = proxy_lower[max(0, idx - 60):idx + 80]
-        #             if "former" not in context and "retired" not in context and "prior" not in context:
-        #                 has_officer = True
-        #                 break
         # Also search full proxy text for exec officer titles
         # (CTO, CDO etc. are executive officers, not always board members)
         search_text = full_proxy_text or strategy_text
@@ -1352,8 +1194,6 @@ class BoardCompositionAnalyzer:
             "independent_count": llm_context.get("independent_count", len(indep_names)) if llm_context else len(indep_names),
             "total_directors": llm_context.get("board_size", len(members)) if llm_context else len(members),
         }
-        # trail["independent_ratio"] = {"points": 10 if ratio_pass else 0, "max_points": 10, "triggered": ratio_pass, "ratio": float(indep_ratio), "independent_count": len(indep_names), "total_directors": len(members)}
-
         has_risk_tech = False
         for c in committees:
             cl = c.lower()
@@ -1377,11 +1217,6 @@ class BoardCompositionAnalyzer:
             score += D("10")
         trail["risk_tech_oversight"] = {"points": 10 if has_risk_tech else 0, "max_points": 10, "triggered": has_risk_tech}
 
-        # has_ai_strat = False
-        # strat_matches = []
-        # if strategy_text:
-        #     strat_matches = [kw for kw in self.AI_STRATEGY_KEYWORDS if kw in strategy_text.lower()]
-        #     has_ai_strat = len(strat_matches) > 0
         has_ai_strat = False
         strat_matches = []
         ai_search_text = full_proxy_text or strategy_text
@@ -1461,10 +1296,10 @@ def _signal_to_dict(signal: GovernanceSignal) -> dict:
 
 def print_signal(signal: GovernanceSignal):
     info = CompanyRegistry.get(signal.ticker)
-    print(f"\n{'=' * 60}")
-    print(f"  BOARD GOVERNANCE - {signal.ticker} ({info['name']})")
-    print(f"{'=' * 60}")
-    print(f"  Score: {signal.governance_score}/100  Confidence: {signal.confidence}")
+    logger.info("=" * 60)
+    logger.info("  BOARD GOVERNANCE - %s (%s)", signal.ticker, info['name'])
+    logger.info("=" * 60)
+    logger.info("  Score: %s/100  Confidence: %s", signal.governance_score, signal.confidence)
 
 def save_signal(signal: GovernanceSignal, out_dir: str = "results") -> Path:
     d = Path(out_dir)
@@ -1492,10 +1327,10 @@ def save_signal_to_s3(signal: GovernanceSignal, evidence_trail: Optional[Dict[st
 def print_summary_table(results: Dict[str, GovernanceSignal]):
     if not results:
         return
-    print(f"\n{'=' * 60}")
+    logger.info("=" * 60)
     for t, s in sorted(results.items(), key=lambda x: x[1].governance_score, reverse=True):
-        print(f"  {t:<8} {s.governance_score:>5}  {float(s.independent_ratio)*100:>5.1f}%  {s.tech_expertise_count:>5}   {s.confidence:>5}")
-    print(f"{'=' * 60}")
+        logger.info("  %-8s %5s  %5.1f%%  %5s   %5s", t, s.governance_score, float(s.independent_ratio)*100, s.tech_expertise_count, s.confidence)
+    logger.info("=" * 60)
 
 # ── CLI ──────────────────────────────────────────────────────
 

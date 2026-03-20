@@ -1,0 +1,184 @@
+
+  ---
+  Architectural Diagram
+
+  ╔══════════════════════════════════════════════════════════════════════════════════╗
+  ║                        PE ORG-AI-R PLATFORM PIPELINE                           ║
+  ╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  ━━━━━━━━━━━━━━━━━━━━━━ CS2: SIGNAL COLLECTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    EXTERNAL SOURCES                   SIGNAL SERVICES                  OUTPUTS
+    ─────────────────                  ───────────────                  ───────
+    LinkedIn / Indeed                ┌─ job_signals.py ──────────────► technology_hiring   [0-100]
+    Glassdoor                        │
+    PatentsView / USPTO ─────────────┤─ patent_signals.py ───────────► innovation_activity [0-100]
+                                     │
+    BuiltWith / Wappalyzer ──────────┤─ tech_signals.py ─────────────► digital_presence    [0-100]
+    Groq (subdomains)                │
+                                     │
+    SEC DEF-14A (proxy stmt) ────────┤─ leadership_analyzer.py ──────► leadership_signals  [0-100]
+                                     │
+    SEC proxy (board bios) ──────────┤─ board_composition_service ───► board_composition   [0-100]
+                                     │
+    Glassdoor reviews (S3) ──────────┘─ culture_service ─────────────► culture             [0-100]
+
+                                             ▼
+                                 Snowflake: external_signals
+                                    company_signal_summaries
+
+  ━━━━━━━━━━━━━━━━━━━━━━ CS3: DIMENSION SCORING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    SEC TEXT (from Snowflake chunks)
+    ────────────────────────────────
+    Item 1  (Business)  ──┐
+    Item 1A (Risk)      ──┤── rubric_scorer.py  ──► sec_item_1, sec_item_1a, sec_item_7
+    Item 7  (MD&A)      ──┘   [5-level rubrics, keyword matching]
+
+    ╔═══════════════════════════════════════════════════════╗
+    ║         EVIDENCE MAPPER (Table 1 Matrix)              ║
+    ║              evidence_mapper.py                       ║
+    ║                                                       ║
+    ║  9 sources × weights ──────────────────────────────► ║
+    ║                                                       ║
+    ║  ┌─────────────────────┬──────────┬─────────────┐    ║
+    ║  │ Source              │ Primary  │ Weight      │    ║
+    ║  ├─────────────────────┼──────────┼─────────────┤    ║
+    ║  │ technology_hiring   │ talent   │ 0.70        │    ║
+    ║  │ innovation_activity │ tech_stk │ 0.50        │    ║
+    ║  │ digital_presence    │ data_inf │ 0.60        │    ║
+    ║  │ leadership_signals  │ leader   │ 0.60        │    ║
+    ║  │ sec_item_1          │ use_case │ 0.70        │    ║
+    ║  │ sec_item_1a         │ ai_gov   │ 0.80        │    ║
+    ║  │ sec_item_7          │ leader   │ 0.50        │    ║
+    ║  │ glassdoor_reviews   │ culture  │ 0.80        │    ║
+    ║  │ board_composition   │ ai_gov   │ 0.70        │    ║
+    ║  └─────────────────────┴──────────┴─────────────┘    ║
+    ╚═══════════════════════════════════════════════════════╝
+
+                      ▼   (each source also distributes to secondary dimensions)
+
+    7 DIMENSION SCORES [0-100]
+    ───────────────────────────────────────────────────────────────────────────
+    data_infrastructure  (w=0.18) ◄── digital_presence (0.60), innovation (0.20)
+    talent_skills        (w=0.17) ◄── technology_hiring (0.70)
+    ai_governance        (w=0.15) ◄── sec_item_1a (0.80), board_composition (0.70)
+    technology_stack     (w=0.15) ◄── innovation (0.50), digital_presence (0.40)
+    leadership_vision    (w=0.13) ◄── leadership_signals (0.60), sec_item_7 (0.50)
+    use_case_portfolio   (w=0.12) ◄── sec_item_1 (0.70), innovation (0.30)
+    culture_change       (w=0.10) ◄── glassdoor_reviews (0.80)
+
+  ━━━━━━━━━━━━━━━━━━━━━ CS3: COMPOSITE SCORING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ┌─────────────────────────────────────────────────────────────────────────────┐
+    │  STEP 1: Talent Concentration (TC)          talent_concentration.py         │
+    │                                                                              │
+    │  Jobs + Glassdoor ──► TC = 1 / √(1 + seniority_ratio + skill_concentration) │
+    │                        TC ∈ [0, 1]  (0=distributed, 1=concentrated)         │
+    └──────────────────────────────────────────┬──────────────────────────────────┘
+                                               │
+    ┌──────────────────────────────────────────▼──────────────────────────────────┐
+    │  STEP 2: V^R (Venture Readiness)             vr_calculator.py               │
+    │                                                                              │
+    │  7 dim scores × weights ──► base_VR                                         │
+    │  base_VR × TalentRiskAdj  (penalty if TC > 0.25: ×(1 - 0.15×(TC-0.25)))   │
+    │         × CVPenalty       (non-compensatory: ×(1 - 0.25×CV))               │
+    │  ──► V^R ∈ [0, 100]                                                         │
+    └──────────────────────────────────────────┬──────────────────────────────────┘
+                                               │
+    ┌──────────────────────────────────────────▼──────────────────────────────────┐
+    │  STEP 3: Position Factor (PF)                position_factor.py             │
+    │                                                                              │
+    │  Market cap percentile ──► PF = 2 × (percentile - 0.5)                     │
+    │  NVDA(95th)→+0.90  JPM(85th)→+0.70  GE(50th)→0.00  DG(30th)→-0.40        │
+    └──────────────────────────────────────────┬──────────────────────────────────┘
+                                               │
+    ┌──────────────────────────────────────────▼──────────────────────────────────┐
+    │  STEP 4: H^R (Human Readiness)               hr_calculator.py              │
+    │                                                                              │
+    │  Sector baseline × (1 + 0.15 × PF)                                          │
+    │  tech=84, finance=68, manufacturing=52, retail=55                           │
+    │  ──► H^R ∈ [0, 100]                                                         │
+    └──────────────────────────────────────────┬──────────────────────────────────┘
+                                               │
+    ┌──────────────────────────────────────────▼──────────────────────────────────┐
+    │  STEP 5: Synergy                             synergy_calculator.py          │
+    │                                                                              │
+    │  Alignment = 1 - |V^R - H^R| / 100                                          │
+    │  TimingFactor: tech=1.20, finance=1.05, retail/mfg=1.00                    │
+    │  Synergy = (V^R × H^R / 100) × Alignment × TimingFactor                   │
+    └──────────────────────────────────────────┬──────────────────────────────────┘
+                                               │
+    ┌──────────────────────────────────────────▼──────────────────────────────────┐
+    │  STEP 6: Org-AI-R Final Score                orgair_calculator.py           │
+    │                                                                              │
+    │  Org-AI-R = 0.88 × [0.60 × V^R + 0.40 × H^R] + 0.12 × Synergy           │
+    │           = (1-β) × [α×VR + (1-α)×HR] + β×Synergy                         │
+    │           α=0.60, β=0.12                                                    │
+    └──────────────────────────────────────────┬──────────────────────────────────┘
+                                               │
+                                               ▼
+                            ┌─────────────────────────────────┐
+                            │         FINAL OUTPUT             │
+                            │  { ticker, org_air_score,        │
+                            │    vr_score, hr_score,           │
+                            │    synergy, tc, pf,              │
+                            │    dimension_scores }            │
+                            │         ▼         ▼              │
+                            │    Snowflake      S3 JSON        │
+                            └─────────────────────────────────┘
+
+  ---
+  How It Works — Summary
+
+  Phase 1 — Signal Collection (CS2)
+
+  Six parallel background tasks hit external APIs and produce normalized [0-100] scores with confidence values:
+
+  ┌─────────────────────┬───────────────────────────────┬───────────────────────────────────────────┐
+  │       Signal        │            Source             │             What it measures              │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ technology_hiring   │ JobSpy (LinkedIn/Indeed)      │ AI job ratio within tech postings         │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ innovation_activity │ PatentsView / USPTO           │ AI patent ratio + recency                 │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ digital_presence    │ BuiltWith + Wappalyzer + Groq │ AI tools in tech stack                    │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ leadership_signals  │ SEC DEF-14A proxy filings     │ Tech exec presence + AI strategy keywords │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ board_composition   │ SEC proxy (board bios)        │ Board-level tech expertise                │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ culture             │ Glassdoor reviews (S3)        │ Culture indicators for AI readiness       │
+  └─────────────────────┴───────────────────────────────┴───────────────────────────────────────────┘
+
+  Each signal uses a weighted sub-scoring formula (ratio + volume + diversity components) then persists to Snowflake.
+
+  ---
+  Phase 2 — Evidence-to-Dimension Mapping (CS3 early)
+
+  The Evidence Mapper (evidence_mapper.py) implements the Table 1 Matrix: each of the 9 evidence sources (6 signals + 3 SEC section rubric scores) distributes its score
+  across the 7 V^R dimensions using primary/secondary weights. For example, technology_hiring contributes 70% to talent_skills, 20% to technology_stack, 10% to
+  data_infrastructure.
+
+  The Rubric Scorer (rubric_scorer.py) processes raw SEC text (Items 1, 1A, 7) through 5-level keyword-matching rubrics to produce 3 additional input scores.
+
+  ---
+  Phase 3 — 7 Dimension Scores
+
+  After mapping, each company has 7 weighted dimension scores:
+
+  data_infrastructure (0.18) → talent_skills (0.17) → ai_governance (0.15) → technology_stack (0.15) → leadership_vision (0.13) → use_case_portfolio (0.12) →
+  culture_change (0.10)
+
+  ---
+  Phase 4 — Composite Scoring (6-step cascade)
+
+  1. TC — Talent Concentration: how distributed vs. siloed AI talent is (from job seniority mix + skill spread)
+  2. V^R — Venture Readiness: weighted average of 7 dimensions, penalized if TC is too concentrated or scores are too unbalanced (CV penalty)
+  3. PF — Position Factor: market cap percentile mapped to [-1, +1] competitive advantage
+  4. H^R — Human Readiness: sector baseline (tech=84, finance=68…) adjusted by PF
+  5. Synergy — how well V^R and H^R are aligned, amplified by sector timing factor
+  6. Org-AI-R — Final score: 0.88 × [0.60×V^R + 0.40×H^R] + 0.12×Synergy
+
+  The constants α=0.60, β=0.12 control how much internal readiness (V^R) vs. market position (H^R) vs. alignment synergy drives the final investment-grade score.
+

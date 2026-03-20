@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from enum import Enum
 
 import httpx
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.models.enumerations import Dimension, DIMENSION_ALIAS_MAP
 from app.prompts.rag_prompts import (
     CS3_KEYWORD_EXPANSION_USER,
     CS3_SCORE_ESTIMATION_USER,
@@ -18,10 +18,13 @@ from app.prompts.rag_prompts import (
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = "llama-3.1-8b-instant"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+from app.core.settings import settings as _settings
 
+GROQ_API_KEY = _settings.GROQ_API_KEY.get_secret_value() if _settings.GROQ_API_KEY else ""
+GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_API_URL = _settings.GROQ_API_URL
+
+# Short dimension names used in CS3 RAG context (matches stored rubric keys)
 DIMENSIONS = [
     "data_infrastructure",
     "ai_governance",
@@ -39,21 +42,6 @@ SCORE_LEVELS = {
     4: ("Good", 60, 79),
     5: ("Excellent", 80, 100),
 }
-
-
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-class Dimension(str, Enum):
-    """The 7 V^R dimensions from CS3."""
-    DATA_INFRASTRUCTURE = "data_infrastructure"
-    AI_GOVERNANCE = "ai_governance"
-    TECHNOLOGY_STACK = "technology_stack"
-    TALENT = "talent"
-    LEADERSHIP = "leadership"
-    USE_CASE_PORTFOLIO = "use_case_portfolio"
-    CULTURE = "culture"
 
 
 class ScoreLevel(int, Enum):
@@ -170,6 +158,8 @@ _BASE_KEYWORDS: Dict[str, List[str]] = {
     "culture": ["data-driven", "experimentation", "agile", "innovation culture", "AI adoption", "continuous learning"],
 }
 
+# Map both canonical and short aliases to the short rubric key names used
+# in _RUBRIC_TEXT and _BASE_KEYWORDS (talent, leadership, culture).
 _DIM_ALIAS_MAP: Dict[str, str] = {
     "data_infrastructure": "data_infrastructure",
     "ai_governance": "ai_governance",
@@ -341,6 +331,25 @@ class RubricCriteria:
     level_name: str
     criteria: str
     keywords: List[str] = field(default_factory=list)
+
+
+def get_rubric_static(dimension: str, level: Optional[int] = None) -> List[RubricCriteria]:
+    """Return RubricCriteria from local static data — no HTTP, no CS3Client needed."""
+    norm = _DIM_ALIAS_MAP.get(dimension, dimension)
+    rubric_text = _RUBRIC_TEXT.get(norm, {})
+    keywords = _BASE_KEYWORDS.get(norm, [])
+    results = []
+    for lvl, criteria_text in rubric_text.items():
+        if level is None or lvl == level:
+            level_name = SCORE_LEVELS.get(lvl, ("Unknown", 0, 0))[0]
+            results.append(RubricCriteria(
+                dimension=dimension,
+                level=lvl,
+                level_name=level_name,
+                criteria=criteria_text,
+                keywords=keywords,
+            ))
+    return results
 
 
 class CS3Client:

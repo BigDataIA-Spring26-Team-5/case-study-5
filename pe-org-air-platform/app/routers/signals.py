@@ -4,28 +4,36 @@
 #
 # Endpoints:
 #   POST  /api/v1/signals/collect                       - Trigger signal collection (background)
+#   GET   /api/v1/signals/tasks/{task_id}               - Get task status
 #   GET   /api/v1/signals/detailed                      - List signals (filterable)
 # """
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from pydantic import BaseModel, Field
 
 from app.repositories.company_repository import CompanyRepository
-from app.repositories.signal_repository import get_signal_repository
-from app.services.job_signal_service import get_job_signal_service
-from app.services.leadership_service import get_leadership_service
-from app.services.patent_signal_service import get_patent_signal_service
-from app.services.tech_signal_service import get_tech_signal_service
+from app.repositories.signal_repository import SignalRepository
+from app.services.task_store import TaskStore
+from app.core.dependencies import (
+    get_company_repository,
+    get_signal_repository,
+    get_job_signal_service,
+    get_patent_signal_service,
+    get_tech_signal_service,
+    get_leadership_service,
+    get_board_composition_service,
+    get_culture_signal_service_dep,
+    get_task_store,
+)
+from app.core.errors import NotFoundError
+from app.routers.common import get_company_or_404
 
 logger = logging.getLogger(__name__)
-
-# In-memory task status store (in production, use Redis or database)
-_task_store: Dict[str, Dict[str, Any]] = {}
 
 # =============================================================================
 # Enums & Models
@@ -36,6 +44,8 @@ VALID_CATEGORIES = [
     "innovation_activity",
     "digital_presence",
     "leadership_signals",
+    "board_composition",
+    "culture",
 ]
 
 
@@ -63,17 +73,6 @@ router = APIRouter(prefix="/api/v1", tags=["Signals"])
 
 
 # =============================================================================
-# Helper: look up company or 404
-# =============================================================================
-
-def _get_company_or_404(ticker: str) -> dict:
-    company = CompanyRepository().get_by_ticker(ticker.upper())
-    if not company:
-        raise HTTPException(status_code=404, detail=f"Company not found: {ticker}")
-    return company
-
-
-# =============================================================================
 # Collection (Background Task)
 # =============================================================================
 
@@ -83,26 +82,31 @@ def _get_company_or_404(ticker: str) -> dict:
     summary="Trigger signal collection for a company",
     description=(
         "Trigger signal collection for a company. Runs asynchronously in the background.\n\n"
-        "**Categories:** technology_hiring, innovation_activity, digital_presence, leadership_signals\n\n"
+        "**Categories:** technology_hiring, innovation_activity, digital_presence, leadership_signals, board_composition, culture\n\n"
         "Returns a task_id to check status via GET /api/v1/signals/tasks/{task_id}"
     ),
 )
-async def collect_signals(request: CollectionRequest, background_tasks: BackgroundTasks):
+async def collect_signals(
+    request: CollectionRequest,
+    background_tasks: BackgroundTasks,
+    task_store: TaskStore = Depends(get_task_store),
+    company_repo: CompanyRepository = Depends(get_company_repository),
+    job_signal_svc=Depends(get_job_signal_service),
+    patent_signal_svc=Depends(get_patent_signal_service),
+    tech_signal_svc=Depends(get_tech_signal_service),
+    leadership_svc=Depends(get_leadership_service),
+    board_composition_svc=Depends(get_board_composition_service),
+    culture_svc=Depends(get_culture_signal_service_dep),
+):
     """Trigger signal collection for a company."""
     task_id = str(uuid4())
-    _task_store[task_id] = {
-        "task_id": task_id,
-        "status": "queued",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "completed_at": None,
+    task_store.create_task(task_id, metadata={
         "progress": {
             "total_categories": len(request.categories),
             "completed_categories": 0,
             "current_category": None,
         },
-        "result": None,
-        "error": None,
-    }
+    })
 
     background_tasks.add_task(
         run_signal_collection,
@@ -111,6 +115,14 @@ async def collect_signals(request: CollectionRequest, background_tasks: Backgrou
         categories=request.categories,
         years_back=request.years_back,
         force_refresh=request.force_refresh,
+        task_store=task_store,
+        company_repo=company_repo,
+        job_signal_svc=job_signal_svc,
+        patent_signal_svc=patent_signal_svc,
+        tech_signal_svc=tech_signal_svc,
+        leadership_svc=leadership_svc,
+        board_composition_svc=board_composition_svc,
+        culture_svc=culture_svc,
     )
 
     logger.info(f"Signal collection queued: task_id={task_id}, company={request.company_id}")
@@ -127,21 +139,31 @@ async def run_signal_collection(
     categories: List[str],
     years_back: int,
     force_refresh: bool,
+    task_store: TaskStore,
+    company_repo: CompanyRepository,
+    job_signal_svc,
+    patent_signal_svc,
+    tech_signal_svc,
+    leadership_svc,
+    board_composition_svc=None,
+    culture_svc=None,
 ):
     """Background task for signal collection."""
     logger.info(f"Starting signal collection: task_id={task_id}, company={company_id}")
-    _task_store[task_id]["status"] = "running"
+    task_store.update_status(task_id, status="running")
 
-    company_repo = CompanyRepository()
     company = company_repo.get_by_ticker(company_id.upper())
     if not company:
         companies = company_repo.get_all()
         company = next((c for c in companies if str(c.get("id")) == company_id), None)
 
     if not company:
-        _task_store[task_id]["status"] = "failed"
-        _task_store[task_id]["error"] = f"Company not found: {company_id}"
-        _task_store[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        task_store.update_status(
+            task_id,
+            status="failed",
+            error=f"Company not found: {company_id}",
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
         return
 
     ticker = company.get("ticker")
@@ -153,19 +175,26 @@ async def run_signal_collection(
         "errors": [],
     }
 
-    category_handlers = {
-        "technology_hiring": lambda: get_job_signal_service().analyze_company(ticker, force_refresh=force_refresh),
-        "innovation_activity": lambda: get_patent_signal_service().analyze_company(ticker, years_back=years_back),
-        "digital_presence": lambda: get_tech_signal_service().analyze_company(ticker, force_refresh=force_refresh),
-        "leadership_signals": lambda: get_leadership_service().analyze_company(ticker),
+    category_services = {
+        "technology_hiring": (job_signal_svc, {"force_refresh": force_refresh}),
+        "innovation_activity": (patent_signal_svc, {"years_back": years_back}),
+        "digital_presence": (tech_signal_svc, {"force_refresh": force_refresh}),
+        "leadership_signals": (leadership_svc, {}),
+        "board_composition": (board_composition_svc, {}),
+        "culture": (culture_svc, {"force_refresh": force_refresh}),
     }
 
     for i, category in enumerate(categories):
-        _task_store[task_id]["progress"]["current_category"] = category
+        task_store.update_status(task_id, progress={
+            "total_categories": len(categories),
+            "completed_categories": i,
+            "current_category": category,
+        })
         try:
-            handler = category_handlers.get(category)
-            if handler:
-                signal_result = await handler()
+            entry = category_services.get(category)
+            if entry:
+                svc, kwargs = entry
+                signal_result = await svc.analyze_company(ticker, **kwargs)
                 result["signals"][category] = {
                     "status": "success",
                     "score": signal_result.get("normalized_score"),
@@ -176,13 +205,36 @@ async def run_signal_collection(
             result["signals"][category] = {"status": "failed", "error": str(e)}
             result["errors"].append(f"{category}: {str(e)}")
 
-        _task_store[task_id]["progress"]["completed_categories"] = i + 1
-
-    _task_store[task_id]["status"] = "completed" if not result["errors"] else "completed_with_errors"
-    _task_store[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
-    _task_store[task_id]["result"] = result
-    _task_store[task_id]["progress"]["current_category"] = None
+    task_store.update_status(
+        task_id,
+        status="completed" if not result["errors"] else "completed_with_errors",
+        completed_at=datetime.now(timezone.utc).isoformat(),
+        result=result,
+        progress={
+            "total_categories": len(categories),
+            "completed_categories": len(categories),
+            "current_category": None,
+        },
+    )
     logger.info(f"Signal collection completed: task_id={task_id}")
+
+
+# =============================================================================
+# Task Status
+# =============================================================================
+
+@router.get(
+    "/signals/tasks/{task_id}",
+    summary="Get signal collection task status",
+)
+async def get_task_status(
+    task_id: str,
+    task_store: TaskStore = Depends(get_task_store),
+):
+    task = task_store.get_task(task_id)
+    if task is None:
+        raise NotFoundError("task", task_id)
+    return task
 
 
 # =============================================================================
@@ -199,27 +251,27 @@ async def list_signals(
     ticker: Optional[str] = Query(None, description="Filter by company ticker"),
     min_score: Optional[float] = Query(None, ge=0, le=100, description="Minimum score"),
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
+    signal_repo: SignalRepository = Depends(get_signal_repository),
+    company_repo: CompanyRepository = Depends(get_company_repository),
 ):
     """List signals with optional filters."""
-    repo = get_signal_repository()
-    company_repo = CompanyRepository()
     results = []
 
     if ticker:
-        company = _get_company_or_404(ticker)
+        company = get_company_or_404(ticker, company_repo)
         company_id = str(company["id"])
         results = (
-            repo.get_signals_by_category(company_id, category)
+            signal_repo.get_signals_by_category(company_id, category)
             if category
-            else repo.get_signals_by_company(company_id)
+            else signal_repo.get_signals_by_company(company_id)
         )
     else:
         for company in company_repo.get_all():
             company_id = str(company.get("id"))
             signals = (
-                repo.get_signals_by_category(company_id, category)
+                signal_repo.get_signals_by_category(company_id, category)
                 if category
-                else repo.get_signals_by_company(company_id)
+                else signal_repo.get_signals_by_company(company_id)
             )
             results.extend(signals)
 

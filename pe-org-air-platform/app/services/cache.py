@@ -8,13 +8,12 @@ Gracefully handles Redis unavailability.
 import time
 import redis
 from typing import Any, Callable, Optional, Tuple, Type
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 
 from app.services.redis_cache import RedisCache
-from app.config import settings
+from app.core.settings import settings
 
 # TTL constants from requirements (in seconds)
 TTL_COMPANY = 300              # 5 minutes
@@ -90,20 +89,6 @@ def create_cache_info(hit: bool, key: str, latency_ms: float, ttl: int) -> Cache
         ttl_seconds=ttl,
         message=f"❌ Cache MISS - Data fetched from database in {latency_ms:.3f}ms, now cached for {ttl}s",
     )
-
-
-# ---------------------------------------------------------------------------
-# invalidate_assessment_cache (shared by assessments and dimensionScores routers)
-# ---------------------------------------------------------------------------
-
-def invalidate_assessment_cache(assessment_id: UUID) -> None:
-    """Delete the Redis cache entry for a single assessment."""
-    cache = get_cache()
-    if cache:
-        try:
-            cache.delete(f"assessment:{assessment_id}")
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------

@@ -5,16 +5,16 @@ app/routers/companies.py
 Handles company CRUD operations with Redis caching.
 """
 
-import logging
+import structlog
 from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from app.core.dependencies import get_company_repository, get_industry_repository
-from app.core.exceptions import raise_error
+from app.core.errors import NotFoundError, ConflictError
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.industry_repository import IndustryRepository
 from app.services.cache import (
@@ -26,7 +26,7 @@ from app.services.cache import (
 )
 from app.services.groq_enrichment import enrich_company_metadata, enrich_portfolio_metadata, get_dimension_keywords
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/v1", tags=["Companies"])
 
@@ -41,7 +41,7 @@ class CompanyBase(BaseModel):
     industry_id: Optional[UUID] = None
     position_factor: float = Field(default=0.0, ge=-1.0, le=1.0)
 
-    @root_validator(pre=True)
+    @model_validator(mode='before')
     @classmethod
     def uppercase_ticker(cls, values):
         if 'ticker' in values and values['ticker']:
@@ -70,6 +70,12 @@ class CompanyResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     cache: Optional[CacheInfo] = None
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def company_id(self) -> str:
+        """String company_id for CS5 client compatibility."""
+        return str(self.id)
 
     class Config:
         from_attributes = True
@@ -100,14 +106,11 @@ class PaginatedCompanyResponse(BaseModel):
 #  Exception Helpers
 
 
-def raise_company_not_found():
-    raise_error(status.HTTP_404_NOT_FOUND, "COMPANY_NOT_FOUND", "Company not found")
-
 def raise_industry_not_found():
-    raise_error(status.HTTP_404_NOT_FOUND, "INDUSTRY_NOT_FOUND", "Industry does not exist")
+    raise NotFoundError("industry", "unknown")
 
 def raise_duplicate_company():
-    raise_error(status.HTTP_409_CONFLICT, "DUPLICATE_COMPANY", "Company already exists in this industry")
+    raise ConflictError("Company already exists in this industry", error_code="DUPLICATE_COMPANY")
 
 
 
@@ -180,7 +183,7 @@ def resolve_company_identifier(
     except ValueError:
         company = company_repo.get_by_ticker(ticker)
     if company is None:
-        raise_error(status.HTTP_404_NOT_FOUND, "COMPANY_NOT_FOUND", f"Company '{ticker}' not found")
+        raise NotFoundError("company", ticker)
     return company
 
 

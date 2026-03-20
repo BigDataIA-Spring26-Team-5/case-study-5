@@ -50,16 +50,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import structlog
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 
-from app.config import settings
+from app.core.settings import settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -200,14 +200,12 @@ def _groq_discover_subdomains(ticker: str, company_name: str, primary_domain: st
       - Deduplicate after stripping
       - Only keep strings that look like valid domains (contain ".", < 100 chars)
     """
-    import os
-
-    groq_api_key = os.getenv("GROQ_API_KEY", "")
+    groq_api_key = settings.GROQ_API_KEY.get_secret_value() if settings.GROQ_API_KEY else ""
     if not groq_api_key:
         logger.warning("GROQ_API_KEY not set — cannot discover subdomains")
         return []
 
-    prompt = f"""The primary website "{primary_domain}" for company "{company_name}" (ticker: {ticker}) 
+    prompt = f"""The primary website "{primary_domain}" for company "{company_name}" (ticker: {ticker})
 blocks web technology fingerprinting tools like BuiltWith and Wappalyzer.
 
 List the real technical subdomains or sister domains for this company that:
@@ -245,7 +243,7 @@ Rules:
 
         import requests as _req
         resp = _req.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            settings.GROQ_API_URL,
             headers=headers, json=payload, timeout=20.0,
         )
         resp.raise_for_status()
@@ -467,26 +465,6 @@ class WappalyzerClient:
 # Groq LLM Fallback (last resort only)
 # ---------------------------------------------------------------------------
 
-# ===========================================================================
-# TODO: SWITCH TO CLAUDE — when ready, do these 3 things:
-#
-#   1. In this file (tech_signals.py):
-#      - Comment out _groq_tech_stack_score() below
-#      - Uncomment _claude_tech_stack_score() below it
-#      - In analyze_company(), swap the one call from:
-#            _groq_tech_stack_score(ticker, company_name or ticker, domain)
-#        to:
-#            _claude_tech_stack_score(ticker, company_name or ticker, domain)
-#
-#   2. In app/services/llm/router.py:
-#      - Uncomment "tech_stack_fallback" entry in _TASK_ROUTING (already added there)
-#      - Uncomment "claude-sonnet-4-20250514" in _MODEL_CONFIGS
-#      - Uncomment "claude-sonnet-4-20250514" in _MODEL_COST_PER_1K
-#      - Comment out the TESTING _TASK_ROUTING block, uncomment PRODUCTION block
-#
-#   3. In .env:
-#      - Add: ANTHROPIC_API_KEY=sk-ant-...
-#
 #   That's it. Everything else (scoring, S3 storage, result parsing) stays identical.
 # ===========================================================================
 
@@ -499,9 +477,7 @@ def _groq_tech_stack_score(ticker: str, company_name: str, domain: str) -> Optio
     Only called when score < LLM_SCORE_FALLBACK_THRESHOLD (10.0).
     Tagged as llm_fallback_used=True. Confidence hard-capped at 0.30.
     """
-    import os
-
-    groq_api_key = os.getenv("GROQ_API_KEY", "")
+    groq_api_key = settings.GROQ_API_KEY.get_secret_value() if settings.GROQ_API_KEY else ""
     if not groq_api_key:
         logger.warning("GROQ_API_KEY not set — cannot run LLM fallback for tech stack")
         return None
@@ -549,7 +525,7 @@ Scoring guidance:
         }
 
         response = httpx.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            settings.GROQ_API_URL,
             headers=headers,
             json=payload,
             timeout=30.0,
@@ -584,15 +560,6 @@ Scoring guidance:
     except Exception as e:
         logger.error(f"Groq LLM fallback failed for {ticker}: {e}")
         return None
-
-
-# def _claude_tech_stack_score(ticker: str, company_name: str, domain: str) -> Optional[Dict[str, Any]]:
-#     """
-#     [PRODUCTION] Use Claude Sonnet via ModelRouter — uncomment when switching.
-#     See TODO block above for full checklist.
-#     """
-#     from app.services.llm.router import ModelRouter
-#     ...
 
 
 # ---------------------------------------------------------------------------

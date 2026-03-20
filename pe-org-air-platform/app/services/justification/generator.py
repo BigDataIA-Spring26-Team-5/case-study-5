@@ -8,7 +8,9 @@ from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-from app.services.integration.cs3_client import CS3Client, DimensionScore, RubricCriteria
+from app.services.integration.cs3_client import (
+    DimensionScore, RubricCriteria, get_rubric_static, score_to_level, _DIM_ALIAS_MAP,
+)
 from app.services.retrieval.hybrid import HybridRetriever, RetrievedDocument
 from app.services.llm.router import ModelRouter
 from app.prompts.rag_prompts import JUSTIFICATION_SYSTEM, JUSTIFICATION_TEMPLATE
@@ -46,11 +48,14 @@ class JustificationGenerator:
 
     def __init__(
         self,
-        cs3: Optional[CS3Client] = None,
+        scoring_repo=None,
         retriever: Optional[HybridRetriever] = None,
         router: Optional[ModelRouter] = None,
     ):
-        self.cs3 = cs3 or CS3Client()
+        if scoring_repo is None:
+            from app.repositories.scoring_repository import ScoringRepository
+            scoring_repo = ScoringRepository()
+        self.scoring_repo = scoring_repo
         self.retriever = retriever or HybridRetriever()
         self.router = router or ModelRouter()
 
@@ -58,15 +63,16 @@ class JustificationGenerator:
         self, ticker: str, dimension: str
     ) -> ScoreJustification:
         """Full pipeline: fetch score → retrieve evidence → generate summary."""
-        # Step 1: Fetch CS3 dimension score
-        dim_score = self.cs3.get_dimension_score(ticker, dimension)
+        # Step 1: Fetch dimension score directly from DB (no HTTP)
+        rows = self.scoring_repo.get_dimension_scores(ticker)
+        dim_score = self._find_dim_score(rows, dimension)
         if dim_score is None:
             dim_score = DimensionScore(
                 dimension=dimension, score=50.0, level=3, level_name="Adequate"
             )
 
-        # Step 2: Get rubric criteria for this level
-        rubric = self.cs3.get_rubric(dimension, dim_score.level)
+        # Step 2: Get rubric criteria from local static data (no HTTP)
+        rubric = get_rubric_static(dimension, dim_score.level)
         rubric_text = rubric[0].criteria if rubric else f"Level {dim_score.level} criteria"
         rubric_keywords = rubric[0].keywords if rubric else dim_score.rubric_keywords[:5]
 
@@ -89,9 +95,9 @@ class JustificationGenerator:
         # Step 5: Match to rubric keywords
         cited = self._match_to_rubric(raw_results, rubric_keywords)
 
-        # Step 6: Identify gaps for next level
+        # Step 6: Identify gaps for next level (local static data)
         next_level = min(dim_score.level + 1, 5)
-        next_rubric = self.cs3.get_rubric(dimension, next_level)
+        next_rubric = get_rubric_static(dimension, next_level)
         gaps = self._identify_gaps(cited, next_rubric)
 
         # Step 7: Call DeepSeek for IC summary
@@ -143,6 +149,25 @@ class JustificationGenerator:
             generated_summary=summary.strip(),
             evidence_strength=self._assess_strength(cited),
         )
+
+    @staticmethod
+    def _find_dim_score(rows: list, dimension: str) -> Optional[DimensionScore]:
+        """Find dimension score from repo rows using alias-aware matching."""
+        if not rows:
+            return None
+        dim_norm = _DIM_ALIAS_MAP.get(dimension, dimension)
+        for row in rows:
+            row_norm = _DIM_ALIAS_MAP.get(row["dimension"], row["dimension"])
+            if row["dimension"] == dimension or row_norm == dim_norm:
+                score = float(row.get("score", 50.0))
+                level, level_name = score_to_level(score)
+                return DimensionScore(
+                    dimension=row["dimension"],
+                    score=score,
+                    level=level,
+                    level_name=level_name,
+                )
+        return None
 
     @staticmethod
     def _match_to_rubric(

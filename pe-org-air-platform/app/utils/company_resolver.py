@@ -16,7 +16,6 @@ Usage:
 """
 from __future__ import annotations
 
-import os
 import re
 import logging
 import requests
@@ -64,9 +63,11 @@ SECTOR_TO_INDUSTRY: Dict[str, str] = {
     "business services":             "business_services",
 }
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+from app.core.settings import settings as _settings
+
+GROQ_API_KEY = _settings.GROQ_API_KEY.get_secret_value() if _settings.GROQ_API_KEY else ""
 GROQ_MODEL = "llama-3.1-8b-instant"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_API_URL = _settings.GROQ_API_URL
 
 SEC_EDGAR_COMPANY = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_EDGAR_TICKERS = "https://www.sec.gov/files/company_tickers.json"

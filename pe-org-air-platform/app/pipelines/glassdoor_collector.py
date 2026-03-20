@@ -11,6 +11,7 @@ Changes in this version (v4 — Option 3):
 
 import json
 import logging
+import structlog
 import os
 import re
 import sys
@@ -25,6 +26,8 @@ from typing import Any, Dict, List, Optional
 import httpx
 from dotenv import load_dotenv
 
+from app.core.settings import settings as _settings
+
 # ---------------------------------------------------------------------
 # PATH + ENV
 # ---------------------------------------------------------------------
@@ -37,8 +40,7 @@ for _p in [str(_PROJECT_ROOT), str(_APP_DIR)]:
 
 load_dotenv(_PROJECT_ROOT / ".env")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -612,7 +614,7 @@ class CultureCollector:
 
         Returns a deduplicated list of lowercase keyword strings (empty list on failure).
         """
-        api_key = os.getenv("GROQ_API_KEY", "")
+        api_key = _settings.GROQ_API_KEY.get_secret_value() if _settings.GROQ_API_KEY else ""
         if not api_key:
             logger.warning("[%s] GROQ_API_KEY not set — skipping AI keyword expansion", ticker)
             return []
@@ -633,7 +635,7 @@ class CultureCollector:
 
         try:
             resp = httpx.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                _settings.GROQ_API_URL,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.1-8b-instant",
@@ -676,7 +678,7 @@ class CultureCollector:
         Returns a CultureSignal with Groq-estimated scores and review_count=0,
         or None if the API call fails so the caller can fall back to defaults.
         """
-        api_key = os.getenv("GROQ_API_KEY", "")
+        api_key = _settings.GROQ_API_KEY.get_secret_value() if _settings.GROQ_API_KEY else ""
         if not api_key:
             logger.warning("[%s] GROQ_API_KEY not set — cannot estimate culture scores", ticker)
             return None
@@ -703,7 +705,7 @@ class CultureCollector:
 
         try:
             resp = httpx.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                _settings.GROQ_API_URL,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.1-8b-instant",
@@ -824,10 +826,61 @@ class CultureCollector:
             "x-rapidapi-host": self.RAPIDAPI_HOST,
         }
 
+    def _resolve_glassdoor_id(self, ticker: str, timeout: float = 15.0) -> Optional[str]:
+        """Use Groq LLM to resolve the correct Glassdoor company_id for the RapidAPI endpoint."""
+        reg = COMPANY_REGISTRY.get(ticker, {})
+        company_name = reg.get("name", ticker)
+
+        api_key = _settings.GROQ_API_KEY.get_secret_value() if _settings.GROQ_API_KEY else ""
+        if not api_key:
+            return None
+
+        prompt = (
+            f'What is the exact Glassdoor company URL slug for "{company_name}" (ticker: {ticker})? '
+            f'This is the string that appears in Glassdoor URLs like glassdoor.com/Reviews/SLUG-Reviews-EXXXXX.htm. '
+            f'Examples: "NVIDIA" for NVIDIA, "JPMorgan-Chase" for JPMorgan Chase, "Walmart" for Walmart, '
+            f'"Google" for Alphabet/Google, "Amazon" for Amazon, "Apple" for Apple. '
+            f'Return ONLY the slug string, nothing else. No quotes, no explanation.'
+        )
+
+        try:
+            resp = httpx.post(
+                _settings.GROQ_API_URL,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0,
+                    "max_tokens": 50,
+                },
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            slug = resp.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+
+            # Sanity check: slug should be short, no spaces, no URLs
+            if slug and len(slug) < 60 and " " not in slug and "/" not in slug:
+                logger.info(f"[{ticker}] Glassdoor slug resolved via LLM: '{company_name}' → '{slug}'")
+                return slug
+            else:
+                logger.warning(f"[{ticker}] LLM returned invalid Glassdoor slug: '{slug}'")
+        except Exception as e:
+            logger.warning(f"[{ticker}] Glassdoor slug LLM resolution failed: {e}")
+
+        return None
+
     def fetch_glassdoor(self, ticker: str, max_pages: int, timeout: float = 30.0) -> List[CultureReview]:
         ticker = ticker.upper()
         reg = COMPANY_REGISTRY[ticker]
-        company_id = reg["glassdoor_id"]
+
+        # Try to resolve the correct Glassdoor company ID via search
+        resolved_id = self._resolve_glassdoor_id(ticker, timeout=timeout)
+        company_id = resolved_id or reg["glassdoor_id"]
+
+        # Cache the resolved ID back so future calls don't search again
+        if resolved_id and resolved_id != reg.get("glassdoor_id"):
+            reg["glassdoor_id"] = resolved_id
+
         reviews: List[CultureReview] = []
 
         for page_num in range(1, max_pages + 1):
@@ -1780,26 +1833,11 @@ class CultureCollector:
     def _get_s3_service(self):
         if not hasattr(self, "_s3_client"):
             try:
-                import boto3
-                bucket = os.getenv("S3_BUCKET", "")
-                key_id = os.getenv("AWS_ACCESS_KEY_ID", "")
-                secret = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-                region = os.getenv("AWS_REGION", "us-east-1")
-
-                if not bucket or not key_id or not secret:
-                    logger.warning("S3 not configured.")
-                    self._s3_client = None
-                    self._s3_bucket = None
-                    return None
-
-                self._s3_client = boto3.client(
-                    "s3",
-                    aws_access_key_id=key_id,
-                    aws_secret_access_key=secret,
-                    region_name=region,
-                )
-                self._s3_bucket = bucket
-                logger.info(f"S3 initialized: bucket={bucket}, region={region}")
+                from app.services.s3_storage import get_s3_service
+                svc = get_s3_service()
+                self._s3_client = svc.s3_client
+                self._s3_bucket = svc.bucket_name
+                logger.info(f"S3 initialized: bucket={self._s3_bucket}")
             except Exception as e:
                 logger.error(f"S3 initialization failed: {e}")
                 self._s3_client = None
@@ -1975,27 +2013,26 @@ def print_signal(signal: CultureSignal):
     reg = COMPANY_REGISTRY.get(signal.ticker, {})
     name = reg.get("name", signal.ticker)
     sector = reg.get("sector", "")
-    print(f"\n{'=' * 60}")
-    print(f"  CULTURE ANALYSIS -- {signal.ticker} ({name})")
+    logger.info("=" * 60)
+    logger.info("  CULTURE ANALYSIS -- %s (%s)", signal.ticker, name)
     if sector:
-        print(f"  Sector: {sector}")
-    print(f"{'=' * 60}")
-    print(f"  Overall Score:          {signal.overall_score}/100")
-    print(f"  Confidence:             {signal.confidence}")
-    print(f"  Reviews Analyzed:       {signal.review_count}")
-    print(f"  Source Breakdown:       {signal.source_breakdown}")
-    print(f"  Avg Rating:             {signal.avg_rating}/5.0")
-    print(f"  Current Employee Ratio: {signal.current_employee_ratio}")
-    print()
-    print(f"  Component Scores:       Weight   Score")
-    print(f"    Innovation:           0.30   {signal.innovation_score:>8}")
-    print(f"    Data-Driven:          0.25   {signal.data_driven_score:>8}")
-    print(f"    AI Awareness:         0.25   {signal.ai_awareness_score:>8}")
-    print(f"    Change Readiness:     0.20   {signal.change_readiness_score:>8}")
+        logger.info("  Sector: %s", sector)
+    logger.info("=" * 60)
+    logger.info("  Overall Score:          %s/100", signal.overall_score)
+    logger.info("  Confidence:             %s", signal.confidence)
+    logger.info("  Reviews Analyzed:       %s", signal.review_count)
+    logger.info("  Source Breakdown:       %s", signal.source_breakdown)
+    logger.info("  Avg Rating:             %s/5.0", signal.avg_rating)
+    logger.info("  Current Employee Ratio: %s", signal.current_employee_ratio)
+    logger.info("  Component Scores:       Weight   Score")
+    logger.info("    Innovation:           0.30   %8s", signal.innovation_score)
+    logger.info("    Data-Driven:          0.25   %8s", signal.data_driven_score)
+    logger.info("    AI Awareness:         0.25   %8s", signal.ai_awareness_score)
+    logger.info("    Change Readiness:     0.20   %8s", signal.change_readiness_score)
     if signal.positive_keywords_found:
-        print(f"\n  (+) Keywords: {', '.join(signal.positive_keywords_found[:10])}")
+        logger.info("  (+) Keywords: %s", ', '.join(signal.positive_keywords_found[:10]))
     if signal.negative_keywords_found:
-        print(f"  (-) Keywords: {', '.join(signal.negative_keywords_found[:10])}")
+        logger.info("  (-) Keywords: %s", ', '.join(signal.negative_keywords_found[:10]))
 
 
 # =====================================================================

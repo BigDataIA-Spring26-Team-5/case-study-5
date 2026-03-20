@@ -31,15 +31,6 @@ from app.models.signal import (
     LeadershipAnalysisResponse,
     CombinedAnalysisResponse,
 )
-from app.models.signal_responses import (
-    JobPostingResponse,
-    PatentResponse,
-    TechStackResponse,
-    SignalCollectRequest,
-    SignalCollectResponse,
-    SignalScoresResponse,
-)
-
 
 
 # SIGNAL CATEGORY ENUM TESTS
@@ -551,116 +542,6 @@ class TestLeadershipScoreBreakdown:
                 total_score=83.0
             )
 
-
-
-# SIGNAL RESPONSES MODEL TESTS
-
-
-class TestJobPostingResponse:
-    """Tests for JobPostingResponse model."""
-
-    def test_valid_response(self):
-        """Test creating a valid job posting response."""
-        response = JobPostingResponse(
-            id="job-123",
-            company_id="comp-456",
-            company_name="Test Corp",
-            title="Data Scientist",
-            description="Build data pipelines",
-            source="linkedin",
-            ai_keywords_found=["data science", "python"],
-            is_ai_related=True,
-            ai_score=70.0
-        )
-        assert response.title == "Data Scientist"
-        assert response.is_ai_related is True
-
-
-class TestPatentResponse:
-    """Tests for PatentResponse model."""
-
-    def test_valid_response(self):
-        """Test creating a valid patent response."""
-        response = PatentResponse(
-            id="pat-123",
-            company_id="comp-456",
-            company_name="Test Corp",
-            patent_id="PAT123",
-            patent_number="US10000001",
-            title="Neural network optimization",
-            ai_keywords_found=["neural network"],
-            is_ai_related=True,
-            ai_score=85.0
-        )
-        assert response.patent_number == "US10000001"
-        assert response.is_ai_related is True
-
-
-class TestSignalCollectRequest:
-    """Tests for SignalCollectRequest model."""
-
-    def test_valid_request(self):
-        """Test creating a valid collect request."""
-        company_id = uuid4()
-        request = SignalCollectRequest(
-            company_id=company_id,
-            collect_jobs=True,
-            collect_patents=True,
-            patents_years_back=5
-        )
-        assert request.company_id == company_id
-        assert request.patents_years_back == 5
-
-    def test_default_values(self):
-        """Test default values."""
-        company_id = uuid4()
-        request = SignalCollectRequest(company_id=company_id)
-        assert request.collect_jobs is True
-        assert request.collect_patents is True
-        assert request.patents_years_back == 5
-
-    def test_invalid_years_too_high(self):
-        """Test that patents_years_back > 20 raises error."""
-        with pytest.raises(ValidationError):
-            SignalCollectRequest(
-                company_id=uuid4(),
-                patents_years_back=25
-            )
-
-    def test_invalid_years_too_low(self):
-        """Test that patents_years_back < 1 raises error."""
-        with pytest.raises(ValidationError):
-            SignalCollectRequest(
-                company_id=uuid4(),
-                patents_years_back=0
-            )
-
-
-class TestSignalScoresResponse:
-    """Tests for SignalScoresResponse model."""
-
-    def test_valid_response(self):
-        """Test creating a valid scores response."""
-        response = SignalScoresResponse(
-            company_id="comp-123",
-            company_name="Test Corp",
-            ticker="TEST",
-            hiring_score=75.0,
-            innovation_score=60.0,
-            tech_stack_score=80.0,
-            composite_score=72.0
-        )
-        assert response.hiring_score == 75.0
-        assert response.composite_score == 72.0
-
-    def test_invalid_score_out_of_range(self):
-        """Test that score > 100 raises error."""
-        with pytest.raises(ValidationError):
-            SignalScoresResponse(
-                company_id="comp-123",
-                company_name="Test Corp",
-                hiring_score=150.0
-            )
 
 
 

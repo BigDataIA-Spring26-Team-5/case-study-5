@@ -1,6 +1,6 @@
 import re
 import json
-import logging
+import structlog
 import hashlib
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
@@ -10,12 +10,7 @@ import pdfplumber
 import fitz  # PyMuPDF
 from io import BytesIO
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 # If all extracted sections are below this word count but the full doc
 # is much larger, the regex only captured TOC entries — use fallback.

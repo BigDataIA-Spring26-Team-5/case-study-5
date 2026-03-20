@@ -17,29 +17,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import structlog
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.core.settings import settings
 from app.config import (
-    settings,
     get_company_search_name,
     get_company_aliases,
     get_search_name_by_official,
     get_aliases_by_official,
-    get_job_search_names,           # NEW
+    get_job_search_names,
 )
 
 
 from app.models.signal import JobPosting
-# from app.pipelines.keywords import (
-#     AI_KEYWORDS,
-#     AI_SKILLS,
-#     AI_TECHSTACK_KEYWORDS,
-#     TECH_JOB_TITLE_KEYWORDS,
-# )
 
 from app.pipelines.keywords import (
     AI_KEYWORDS,
@@ -54,7 +48,7 @@ from app.pipelines.utils import clean_nan, safe_filename
 
 from rapidfuzz import fuzz
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -524,14 +518,14 @@ def step4_score_job_market(state: SignalPipelineState) -> SignalPipelineState:
 
 def step5_store_to_s3_and_snowflake(state: SignalPipelineState) -> SignalPipelineState:
     from app.services.s3_storage import get_s3_service
-    from app.repositories.signal_repository import get_signal_repository
+    from app.repositories.signal_repository import SignalRepository
 
     logger.info("-" * 40)
     logger.info("☁️ [5/5] STORING TO S3 & SNOWFLAKE")
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     s3 = get_s3_service()
-    signal_repo = get_signal_repository()
+    signal_repo = SignalRepository()
 
     company_jobs: Dict[str, List] = defaultdict(list)
     for p in state.job_postings:

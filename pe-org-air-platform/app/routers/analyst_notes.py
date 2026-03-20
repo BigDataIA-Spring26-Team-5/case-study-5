@@ -10,28 +10,20 @@ Endpoints:
 """
 from __future__ import annotations
 
-import logging
+import structlog
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.repositories.company_repository import CompanyRepository
 from app.services.collection.analyst_notes import AnalystNotesCollector
+from app.core.dependencies import get_company_repository, get_analyst_notes_collector
+from app.core.errors import NotFoundError, ExternalServiceError
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/v1/analyst-notes", tags=["Analyst Notes"])
-
-# Module-level singleton
-_collector: Optional[AnalystNotesCollector] = None
-
-
-def get_collector() -> AnalystNotesCollector:
-    global _collector
-    if _collector is None:
-        _collector = AnalystNotesCollector()
-    return _collector
 
 
 # =====================================================================
@@ -95,6 +87,34 @@ class ListNotesResponse(BaseModel):
 
 
 # =====================================================================
+# Helper
+# =====================================================================
+
+def _resolve_company(ticker: str, repo: CompanyRepository) -> tuple[str, str]:
+    """Resolve ticker to (ticker, company_id) or raise 404."""
+    ticker = ticker.upper()
+    company = repo.get_by_ticker(ticker)
+    if company is None:
+        raise NotFoundError("company", ticker)
+    return ticker, str(company["id"])
+
+
+def _note_to_response(note) -> AnalystNoteOut:
+    return AnalystNoteOut(
+        note_id=note.note_id,
+        company_id=note.company_id,
+        note_type=note.note_type,
+        content=note.content,
+        dimension=note.dimension,
+        assessor=note.assessor,
+        confidence=note.confidence,
+        metadata=note.metadata,
+        created_at=note.created_at,
+        s3_key=note.s3_key,
+    )
+
+
+# =====================================================================
 # POST /{ticker}/interview — Submit interview transcript
 # =====================================================================
 
@@ -104,14 +124,14 @@ class ListNotesResponse(BaseModel):
     summary="Submit interview transcript",
     description="Index an interview transcript into ChromaDB, Snowflake, and S3.",
 )
-async def submit_interview(ticker: str, body: SubmitInterviewRequest):
-    ticker = ticker.upper()
-    company = CompanyRepository().get_by_ticker(ticker)
-    if company is None:
-        raise HTTPException(status_code=404, detail=f"Company '{ticker}' not found.")
-    company_id = str(company["id"])
+async def submit_interview(
+    ticker: str,
+    body: SubmitInterviewRequest,
+    repo: CompanyRepository = Depends(get_company_repository),
+    collector: AnalystNotesCollector = Depends(get_analyst_notes_collector),
+):
+    ticker, company_id = _resolve_company(ticker, repo)
     try:
-        collector = get_collector()
         note_id = collector.submit_interview(
             company_id=company_id,
             interviewee=body.interviewee,
@@ -131,8 +151,8 @@ async def submit_interview(ticker: str, body: SubmitInterviewRequest):
             s3_key=note.s3_key if note else None,
         )
     except Exception as e:
-        logger.error("submit_interview failed company_id=%s: %s", company_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("submit_interview_failed", company_id=company_id, error=str(e), exc_info=True)
+        raise ExternalServiceError("analyst_notes", "Failed to submit interview transcript.")
 
 
 # =====================================================================
@@ -145,14 +165,14 @@ async def submit_interview(ticker: str, body: SubmitInterviewRequest):
     summary="Submit due diligence finding",
     description="Index a DD finding into ChromaDB, Snowflake, and S3.",
 )
-async def submit_dd_finding(ticker: str, body: SubmitDDFindingRequest):
-    ticker = ticker.upper()
-    company = CompanyRepository().get_by_ticker(ticker)
-    if company is None:
-        raise HTTPException(status_code=404, detail=f"Company '{ticker}' not found.")
-    company_id = str(company["id"])
+async def submit_dd_finding(
+    ticker: str,
+    body: SubmitDDFindingRequest,
+    repo: CompanyRepository = Depends(get_company_repository),
+    collector: AnalystNotesCollector = Depends(get_analyst_notes_collector),
+):
+    ticker, company_id = _resolve_company(ticker, repo)
     try:
-        collector = get_collector()
         note_id = collector.submit_dd_finding(
             company_id=company_id,
             title=body.title,
@@ -172,8 +192,8 @@ async def submit_dd_finding(ticker: str, body: SubmitDDFindingRequest):
             s3_key=note.s3_key if note else None,
         )
     except Exception as e:
-        logger.error("submit_dd_finding failed company_id=%s: %s", company_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("submit_dd_finding_failed", company_id=company_id, error=str(e), exc_info=True)
+        raise ExternalServiceError("analyst_notes", "Failed to submit DD finding.")
 
 
 # =====================================================================
@@ -186,14 +206,14 @@ async def submit_dd_finding(ticker: str, body: SubmitDDFindingRequest):
     summary="Submit data room document summary",
     description="Index a data room summary into ChromaDB, Snowflake, and S3.",
 )
-async def submit_data_room(ticker: str, body: SubmitDataRoomRequest):
-    ticker = ticker.upper()
-    company = CompanyRepository().get_by_ticker(ticker)
-    if company is None:
-        raise HTTPException(status_code=404, detail=f"Company '{ticker}' not found.")
-    company_id = str(company["id"])
+async def submit_data_room(
+    ticker: str,
+    body: SubmitDataRoomRequest,
+    repo: CompanyRepository = Depends(get_company_repository),
+    collector: AnalystNotesCollector = Depends(get_analyst_notes_collector),
+):
+    ticker, company_id = _resolve_company(ticker, repo)
     try:
-        collector = get_collector()
         note_id = collector.submit_data_room_summary(
             company_id=company_id,
             document_name=body.document_name,
@@ -212,8 +232,8 @@ async def submit_data_room(ticker: str, body: SubmitDataRoomRequest):
             s3_key=note.s3_key if note else None,
         )
     except Exception as e:
-        logger.error("submit_data_room failed company_id=%s: %s", company_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("submit_data_room_failed", company_id=company_id, error=str(e), exc_info=True)
+        raise ExternalServiceError("analyst_notes", "Failed to submit data room summary.")
 
 
 # =====================================================================
@@ -226,36 +246,22 @@ async def submit_data_room(ticker: str, body: SubmitDataRoomRequest):
     summary="List all analyst notes for a company",
     description="Returns all notes from memory cache (with Snowflake fallback).",
 )
-async def list_notes(ticker: str):
-    ticker = ticker.upper()
-    company = CompanyRepository().get_by_ticker(ticker)
-    if company is None:
-        raise HTTPException(status_code=404, detail=f"Company '{ticker}' not found.")
-    company_id = str(company["id"])
+async def list_notes(
+    ticker: str,
+    repo: CompanyRepository = Depends(get_company_repository),
+    collector: AnalystNotesCollector = Depends(get_analyst_notes_collector),
+):
+    ticker, company_id = _resolve_company(ticker, repo)
     try:
-        notes = get_collector().list_notes(company_id)
+        notes = collector.list_notes(company_id)
         return ListNotesResponse(
             company_id=company_id,
             count=len(notes),
-            notes=[
-                AnalystNoteOut(
-                    note_id=n.note_id,
-                    company_id=n.company_id,
-                    note_type=n.note_type,
-                    content=n.content,
-                    dimension=n.dimension,
-                    assessor=n.assessor,
-                    confidence=n.confidence,
-                    metadata=n.metadata,
-                    created_at=n.created_at,
-                    s3_key=n.s3_key,
-                )
-                for n in notes
-            ],
+            notes=[_note_to_response(n) for n in notes],
         )
     except Exception as e:
-        logger.error("list_notes failed company_id=%s: %s", company_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("list_notes_failed", company_id=company_id, error=str(e), exc_info=True)
+        raise ExternalServiceError("analyst_notes", "Failed to list analyst notes.")
 
 
 # =====================================================================
@@ -268,33 +274,23 @@ async def list_notes(ticker: str):
     summary="Get a single analyst note by ID",
     description="Fetches from memory cache first, then Snowflake fallback.",
 )
-async def get_note(ticker: str, note_id: str):
-    ticker = ticker.upper()
-    company = CompanyRepository().get_by_ticker(ticker)
-    if company is None:
-        raise HTTPException(status_code=404, detail=f"Company '{ticker}' not found.")
-    company_id = str(company["id"])
+async def get_note(
+    ticker: str,
+    note_id: str,
+    repo: CompanyRepository = Depends(get_company_repository),
+    collector: AnalystNotesCollector = Depends(get_analyst_notes_collector),
+):
+    ticker, company_id = _resolve_company(ticker, repo)
     try:
-        note = get_collector().get_note(note_id)
+        note = collector.get_note(note_id)
     except Exception as e:
-        logger.error("get_note failed note_id=%s: %s", note_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("get_note_failed", note_id=note_id, error=str(e), exc_info=True)
+        raise ExternalServiceError("analyst_notes", "Failed to fetch analyst note.")
 
     if note is None:
-        raise HTTPException(status_code=404, detail=f"Note '{note_id}' not found.")
+        raise NotFoundError("note", note_id)
 
-    return AnalystNoteOut(
-        note_id=note.note_id,
-        company_id=note.company_id,
-        note_type=note.note_type,
-        content=note.content,
-        dimension=note.dimension,
-        assessor=note.assessor,
-        confidence=note.confidence,
-        metadata=note.metadata,
-        created_at=note.created_at,
-        s3_key=note.s3_key,
-    )
+    return _note_to_response(note)
 
 
 # =====================================================================
@@ -310,33 +306,19 @@ async def get_note(ticker: str, note_id: str):
         "and re-indexes them in ChromaDB. Call this after a server restart."
     ),
 )
-async def load_from_snowflake(ticker: str):
-    ticker = ticker.upper()
-    company = CompanyRepository().get_by_ticker(ticker)
-    if company is None:
-        raise HTTPException(status_code=404, detail=f"Company '{ticker}' not found.")
-    company_id = str(company["id"])
+async def load_from_snowflake(
+    ticker: str,
+    repo: CompanyRepository = Depends(get_company_repository),
+    collector: AnalystNotesCollector = Depends(get_analyst_notes_collector),
+):
+    ticker, company_id = _resolve_company(ticker, repo)
     try:
-        notes = get_collector().load_from_snowflake(company_id)
+        notes = collector.load_from_snowflake(company_id)
         return ListNotesResponse(
             company_id=company_id,
             count=len(notes),
-            notes=[
-                AnalystNoteOut(
-                    note_id=n.note_id,
-                    company_id=n.company_id,
-                    note_type=n.note_type,
-                    content=n.content,
-                    dimension=n.dimension,
-                    assessor=n.assessor,
-                    confidence=n.confidence,
-                    metadata=n.metadata,
-                    created_at=n.created_at,
-                    s3_key=n.s3_key,
-                )
-                for n in notes
-            ],
+            notes=[_note_to_response(n) for n in notes],
         )
     except Exception as e:
-        logger.error("load_from_snowflake failed company_id=%s: %s", company_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("load_from_snowflake_failed", company_id=company_id, error=str(e), exc_info=True)
+        raise ExternalServiceError("analyst_notes", "Failed to load notes from Snowflake.")

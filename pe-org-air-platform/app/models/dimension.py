@@ -7,18 +7,27 @@ from pydantic import BaseModel, Field, model_validator
 from app.models.enumerations import Dimension
 
 # DEFAULT WEIGHTS PER DIMENSION
-# These weights determine the relative importance of each dimension
-# when calculating overall assessment scores. Total weights sum to 1.0
+# Loaded from app.core.settings so they stay in sync with the canonical
+# Pydantic Settings class and can be overridden via environment variables.
+# Total weights must sum to 1.0 (enforced by the Settings model_validator).
 
-DIMENSION_WEIGHTS = {
-    Dimension.DATA_INFRASTRUCTURE: 0.25,   # Most critical - data foundation
-    Dimension.AI_GOVERNANCE: 0.20,         # Compliance & risk management
-    Dimension.TECHNOLOGY_STACK: 0.15,      # Technical capabilities
-    Dimension.TALENT_SKILLS: 0.15,         # Human capital
-    Dimension.LEADERSHIP_VISION: 0.10,     # Strategic alignment
-    Dimension.USE_CASE_PORTFOLIO: 0.10,    # Practical applications
-    Dimension.CULTURE_CHANGE: 0.05,        # Organizational readiness
-}
+from app.core.settings import get_settings as _get_settings
+
+
+def _load_dimension_weights() -> dict:
+    s = _get_settings()
+    return {
+        Dimension.DATA_INFRASTRUCTURE: s.W_DATA_INFRA,
+        Dimension.AI_GOVERNANCE:       s.W_AI_GOVERNANCE,
+        Dimension.TECHNOLOGY_STACK:    s.W_TECH_STACK,
+        Dimension.TALENT_SKILLS:       s.W_TALENT,
+        Dimension.LEADERSHIP_VISION:   s.W_LEADERSHIP,
+        Dimension.USE_CASE_PORTFOLIO:  s.W_USE_CASES,
+        Dimension.CULTURE_CHANGE:      s.W_CULTURE,
+    }
+
+
+DIMENSION_WEIGHTS = _load_dimension_weights()
 
 
 # BASE SCHEMA

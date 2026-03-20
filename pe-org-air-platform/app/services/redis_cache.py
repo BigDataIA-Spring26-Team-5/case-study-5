@@ -1,8 +1,7 @@
 import redis
 from typing import Optional, TypeVar, Type
 from pydantic import BaseModel
-from app.config import settings
-from functools import lru_cache
+from app.core.settings import settings
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -39,7 +38,3 @@ class RedisCache:
         """Invalidate all keys matching pattern."""
         for key in self.client.scan_iter(match=pattern):
             self.client.delete(key)
-# ---- FastAPI dependency singleton ----
-@lru_cache
-def get_redis_cache() -> RedisCache:
-    return RedisCache()

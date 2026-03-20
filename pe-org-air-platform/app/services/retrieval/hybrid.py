@@ -22,7 +22,11 @@ FIX (this session — direct evidence seeding):
 from __future__ import annotations
 
 import logging
+import os
+import pickle
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 
 try:
@@ -47,6 +51,10 @@ BM25_SEED_LIMIT = 500
 # If fewer than this many ticker-specific docs are in the BM25 corpus,
 # trigger a per-ticker re-seed before sparse scoring.
 BM25_TICKER_MIN_DOCS = 50
+
+# Pickle cache for BM25 corpus
+BM25_PICKLE_PATH = os.environ.get("BM25_PICKLE_PATH", "/tmp/bm25_cache.pkl")
+BM25_PICKLE_TTL = 86400  # 24 hours
 
 # How many ticker-specific docs to fetch when re-seeding for a ticker.
 BM25_TICKER_SEED_K = 200
@@ -106,8 +114,49 @@ class HybridRetriever:
         # Track which tickers have already been seeded into BM25
         self._seeded_tickers: Set[str] = set()
 
-        # Seed BM25 from existing ChromaDB docs on startup
-        self._load_bm25_from_store()
+        # Try pickle first, then fall back to ChromaDB seeding
+        if not self._try_load_pickle():
+            self._load_bm25_from_store()
+
+    @property
+    def sparse_index_size(self) -> int:
+        """Number of documents in the BM25 sparse index."""
+        return len(self._doc_store)
+
+    # ── Pickle persistence ─────────────────────────────────────────────────────
+
+    def _try_load_pickle(self) -> bool:
+        path = Path(BM25_PICKLE_PATH)
+        if not path.exists():
+            logger.debug("bm25_pickle_miss reason=file_not_found path=%s", BM25_PICKLE_PATH)
+            return False
+        age = time.time() - path.stat().st_mtime
+        if age > BM25_PICKLE_TTL:
+            logger.info("bm25_pickle_expired age_seconds=%.0f ttl=%d", age, BM25_PICKLE_TTL)
+            return False
+        try:
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+            self._doc_store = data["doc_store"]
+            self._tokenized_corpus = data["tokenized_corpus"]
+            if _BM25_AVAILABLE and self._tokenized_corpus:
+                self._bm25 = BM25Okapi(self._tokenized_corpus)
+            logger.info("bm25_pickle_loaded doc_count=%d age_seconds=%.0f", len(self._doc_store), age)
+            return True
+        except Exception as e:
+            logger.warning("bm25_pickle_load_failed error=%s", e)
+            return False
+
+    def _save_pickle(self) -> None:
+        if not self._doc_store:
+            return
+        try:
+            data = {"doc_store": self._doc_store, "tokenized_corpus": self._tokenized_corpus}
+            with open(BM25_PICKLE_PATH, "wb") as f:
+                pickle.dump(data, f)
+            logger.info("bm25_pickle_saved doc_count=%d path=%s", len(self._doc_store), BM25_PICKLE_PATH)
+        except Exception as e:
+            logger.warning("bm25_pickle_save_failed error=%s", e)
 
     # ── Startup global seed ────────────────────────────────────────────────────
 
@@ -160,6 +209,7 @@ class HybridRetriever:
             self._tokenized_corpus = [d.content.lower().split() for d in docs]
             self._bm25 = BM25Okapi(self._tokenized_corpus)
             logger.info("bm25_seeded doc_count=%d", len(docs))
+            self._save_pickle()
         else:
             logger.warning("bm25_seed_empty no_docs_fetched")
 
@@ -239,6 +289,7 @@ class HybridRetriever:
             "bm25_seeded_from_evidence added=%d total_corpus=%d tickers=%s",
             len(new_docs), len(self._doc_store), tickers,
         )
+        self._save_pickle()
 
     # ── Per-ticker lazy seed (DEPRECATED — now a no-op) ───────────────────────
 
@@ -258,20 +309,68 @@ class HybridRetriever:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    def rebuild_sparse_index_from_chroma(self) -> int:
+        """Rebuild BM25 sparse index from ALL ChromaDB documents.
+
+        Unlike _load_bm25_from_store() which only samples ~500 docs via seed queries,
+        this fetches every document in the collection for complete coverage.
+        Call on startup to restore full hybrid retrieval capability.
+        Returns the number of documents indexed.
+        """
+        if not _BM25_AVAILABLE:
+            logger.warning("rebuild_sparse_skipped reason=bm25_unavailable")
+            return 0
+
+        # Uses get_all_documents() instead of collection.get() — retrieves complete corpus
+        # including metadata, not just a seed-query subset. This is intentionally more
+        # comprehensive than the plan's original collection.get() approach.
+        all_results = self._vector_store.get_all_documents()
+        if not all_results:
+            logger.info("rebuild_sparse_skipped reason=no_documents_in_chroma")
+            return 0
+
+        self._doc_store = [
+            RetrievedDocument(
+                doc_id=r.doc_id,
+                content=r.content,
+                metadata=r.metadata,
+                score=0.0,
+                retrieval_method="chroma_rebuild",
+            )
+            for r in all_results
+            if r.content
+        ]
+        self._tokenized_corpus = [d.content.lower().split() for d in self._doc_store]
+        self._bm25 = BM25Okapi(self._tokenized_corpus)
+        self._seeded_tickers = {
+            d.metadata.get("ticker")
+            for d in self._doc_store
+            if d.metadata.get("ticker")
+        }
+        self._save_pickle()
+        logger.info("rebuild_sparse_complete doc_count=%d", len(self._doc_store))
+        return len(self._doc_store)
+
     def refresh_sparse_index(self):
         """
-        Rebuild BM25 — call after indexing new documents.
+        Rebuild BM25 from the current _doc_store.
 
-        Re-seeds from ChromaDB so the sparse index reflects the latest state.
-        Also clears the seeded-ticker cache so subsequent queries re-seed
-        with the fresh index.
+        Does NOT wipe the doc store — just rebuilds the BM25 index from
+        whatever is already accumulated. This prevents the bug where
+        indexing ticker B would erase ticker A's BM25 data.
+
+        If _doc_store is empty (fresh startup), seeds from ChromaDB.
         """
-        logger.info("bm25_refresh_start")
-        self._doc_store = []
-        self._bm25 = None
-        self._tokenized_corpus = []
-        self._seeded_tickers.clear()
-        self._load_bm25_from_store()
+        logger.info("bm25_refresh_start doc_count=%d", len(self._doc_store))
+        if not self._doc_store:
+            self._load_bm25_from_store()
+        else:
+            self._tokenized_corpus = [
+                d.content.lower().split() for d in self._doc_store
+            ]
+            if _BM25_AVAILABLE and self._tokenized_corpus:
+                self._bm25 = BM25Okapi(self._tokenized_corpus)
+            self._save_pickle()
         logger.info("bm25_refresh_complete doc_count=%d", len(self._doc_store))
 
     def _encode(self, texts: List[str]) -> List[List[float]]:

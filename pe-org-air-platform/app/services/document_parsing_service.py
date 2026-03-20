@@ -1,27 +1,23 @@
 import json
-import logging
+import structlog
 from typing import List, Dict, Optional
 from dataclasses import asdict
 from app.pipelines.document_parser import get_document_parser, ParsedDocument
 from app.services.s3_storage import get_s3_service
-from app.repositories.document_repository import get_document_repository
+from app.repositories.document_repository import DocumentRepository
 from app.services.utils import make_singleton_factory
+from app.core.errors import NotFoundError, ExternalServiceError
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class DocumentParsingService:
     """Service to orchestrate document parsing"""
-    
-    def __init__(self):
+
+    def __init__(self, document_repo=None):
         self.parser = get_document_parser()
         self.s3_service = get_s3_service()
-        self.doc_repo = get_document_repository()
+        self.doc_repo = document_repo or DocumentRepository()
     
     def _generate_parsed_s3_key(self, ticker: str, filing_type: str, 
                                  filing_date: str, doc_type: str) -> str:
@@ -39,7 +35,7 @@ class DocumentParsingService:
         # Get document metadata from Snowflake
         doc = self.doc_repo.get_by_id(document_id)
         if not doc:
-            raise ValueError(f"Document not found: {document_id}")
+            raise NotFoundError("document", document_id)
         
         ticker = doc['ticker']
         filing_type = doc['filing_type']
@@ -52,7 +48,7 @@ class DocumentParsingService:
         logger.info(f"  ⬇️  Downloading from S3: {s3_key}")
         content = self.s3_service.get_file(s3_key)
         if not content:
-            raise ValueError(f"Could not download file from S3: {s3_key}")
+            raise ExternalServiceError("s3", f"Could not download file from S3: {s3_key}")
         
         logger.info(f"  ✅ Downloaded {len(content):,} bytes")
         
@@ -125,7 +121,7 @@ class DocumentParsingService:
         
         if not docs:
             logger.warning(f"❌ No documents found for ticker: {ticker}")
-            raise ValueError(f"No documents found for ticker: {ticker}")
+            raise NotFoundError("documents", ticker)
         
         logger.info(f"📚 Found {len(docs)} documents to parse")
         

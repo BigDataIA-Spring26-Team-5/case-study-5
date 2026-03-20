@@ -1,12 +1,12 @@
 # app/repositories/signal_repository.py
 import json
-import logging
+import structlog
 from typing import List, Dict, Optional
 from uuid import uuid4
 from datetime import datetime, timezone
 from app.repositories.base import BaseRepository
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class SignalRepository(BaseRepository):
@@ -78,7 +78,7 @@ class SignalRepository(BaseRepository):
                     if record.get('metadata') and isinstance(record['metadata'], str):
                         try:
                             record['metadata'] = json.loads(record['metadata'])
-                        except:
+                        except (json.JSONDecodeError, ValueError, TypeError):
                             pass
                     results.append(record)
                 return results
@@ -107,7 +107,7 @@ class SignalRepository(BaseRepository):
                     if record.get('metadata') and isinstance(record['metadata'], str):
                         try:
                             record['metadata'] = json.loads(record['metadata'])
-                        except:
+                        except (json.JSONDecodeError, ValueError, TypeError):
                             pass
                     results.append(record)
                 return results
@@ -135,7 +135,7 @@ class SignalRepository(BaseRepository):
                     if record.get('metadata') and isinstance(record['metadata'], str):
                         try:
                             record['metadata'] = json.loads(record['metadata'])
-                        except:
+                        except (json.JSONDecodeError, ValueError, TypeError):
                             pass
                     results.append(record)
                 return results
@@ -192,13 +192,15 @@ class SignalRepository(BaseRepository):
                 cur.close()
 
     def get_summary_by_ticker(self, ticker: str) -> Optional[Dict]:
-        """Get signal summary by ticker."""
+        """Get signal summary by ticker (most recently updated if duplicates exist)."""
         sql = """
         SELECT company_id, ticker, technology_hiring_score, innovation_activity_score,
                digital_presence_score, leadership_signals_score, composite_score,
                signal_count, last_updated
         FROM company_signal_summaries
         WHERE ticker = %s
+        ORDER BY last_updated DESC NULLS LAST
+        LIMIT 1
         """
         with self.get_connection() as conn:
             cur = conn.cursor()
@@ -374,6 +376,24 @@ class SignalRepository(BaseRepository):
             finally:
                 cur.close()
 
+    def get_signal_categories_for_ticker(self, ticker: str) -> List[str]:
+        """Return distinct signal categories that exist for a ticker."""
+        sql = """
+        SELECT DISTINCT s.category
+        FROM external_signals s
+        JOIN companies c ON s.company_id = c.id
+        WHERE UPPER(c.ticker) = %s
+          AND s.category IS NOT NULL
+        ORDER BY s.category
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (ticker.upper(),))
+                return [row[0] for row in cur.fetchall()]
+            finally:
+                cur.close()
+
     def delete_summary(self, company_id: str) -> bool:
         """Delete signal summary for a company."""
         sql = "DELETE FROM company_signal_summaries WHERE company_id = %s"
@@ -387,11 +407,3 @@ class SignalRepository(BaseRepository):
                 cur.close()
 
 
-# Singleton
-_repo: Optional[SignalRepository] = None
-
-def get_signal_repository() -> SignalRepository:
-    global _repo
-    if _repo is None:
-        _repo = SignalRepository()
-    return _repo

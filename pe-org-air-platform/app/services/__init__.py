@@ -1,5 +1,11 @@
 """
-Services module for the PE OrgAIR Platform.
+Services — PE Org-AI-R Platform
+app/services/
+
+Subdirectory layout rule:
+  Top-level flat  — single-class services with no domain siblings.
+  Subdirectory    — services that share a domain, have utilities, or need
+                    their own namespace (e.g. signals/, retrieval/, llm/).
 """
 
 from app.services.cache import get_cache
@@ -28,31 +34,31 @@ def get_document_parsing_service():
 
 def get_leadership_service():
     """Lazy import to avoid circular dependency."""
-    from app.services.leadership_service import get_leadership_service as _get
+    from app.services.signals.leadership_service import get_leadership_service as _get
     return _get()
 
 
 def get_job_data_service():
     """Lazy import to avoid circular dependency."""
-    from app.services.job_data_service import get_job_data_service as _get
+    from app.services.signals.job_data_service import get_job_data_service as _get
     return _get()
 
 
 def get_job_signal_service():
     """Lazy import to avoid circular dependency."""
-    from app.services.job_signal_service import get_job_signal_service as _get
+    from app.services.signals.job_signal_service import get_job_signal_service as _get
     return _get()
 
 
 def get_tech_signal_service():
     """Lazy import to avoid circular dependency."""
-    from app.services.tech_signal_service import get_tech_signal_service as _get
+    from app.services.signals.tech_signal_service import get_tech_signal_service as _get
     return _get()
 
 
 def get_patent_signal_service():
     """Lazy import to avoid circular dependency."""
-    from app.services.patent_signal_service import get_patent_signal_service as _get
+    from app.services.signals.patent_signal_service import get_patent_signal_service as _get
     return _get()
 
 

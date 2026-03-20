@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import os
 import time
+import structlog
 from dataclasses import dataclass, field
 from typing import AsyncIterator, List, Dict, Any, Optional
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+from app.core.errors import ExternalServiceError
+
+logger = structlog.get_logger()
 
 try:
     import litellm
@@ -134,13 +139,19 @@ class ModelRouter:
     ) -> str:
         """Async completion. Tries primary model, then fallback."""
         if self.budget.is_over_limit():
-            raise RuntimeError(f"Daily budget of ${self.budget.limit_usd} exceeded (spent ${self.budget.spend:.4f}).")
+            logger.warning("llm_budget_exceeded", task=task,
+                           budget=self.budget.limit_usd, spent=round(self.budget.spend, 4))
+            raise ExternalServiceError("llm_router", f"Daily budget of ${self.budget.limit_usd} exceeded (spent ${self.budget.spend:.4f}).")
 
         primary, fallback = _TASK_ROUTING.get(
             task, ("groq/llama-3.1-8b-instant", "deepseek/deepseek-chat")
         )
 
+        start = time.perf_counter()
+        logger.info("llm_call_started", task=task, model=primary)
+
         last_exc: Exception = RuntimeError("No models tried.")
+        model_used = primary
         for model in (primary, fallback):
             try:
                 if stream:
@@ -154,19 +165,26 @@ class ModelRouter:
                         max_tokens=max_tokens,
                     ):
                         chunks.append(chunk)
-                    return "".join(chunks)
-
-                return await self._call_model(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
+                    result = "".join(chunks)
+                else:
+                    result = await self._call_model(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                model_used = model
+                duration = time.perf_counter() - start
+                logger.info("llm_call_completed", task=task, model=model_used,
+                            duration_seconds=round(duration, 3))
+                return result
             except Exception as exc:
+                logger.warning("llm_model_failed", model=model, error=str(exc),
+                               fallback=fallback if model == primary else None)
                 last_exc = exc
                 continue
 
-        raise RuntimeError(f"Both models failed for task '{task}': {last_exc}")
+        raise ExternalServiceError("llm_router", f"Both models failed for task '{task}': {last_exc}")
 
     async def _call_model(
         self,

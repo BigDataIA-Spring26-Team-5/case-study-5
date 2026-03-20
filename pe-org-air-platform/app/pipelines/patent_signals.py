@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import structlog
 import os
 import re
 from collections import defaultdict
@@ -35,7 +35,7 @@ from app.models.signal import SignalCategory, SignalSource, ExternalSignal
 from app.services.s3_storage import get_s3_service
 
 load_dotenv()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 PATENTSVIEW_API_URL = os.getenv("PATENTSVIEW_API_URL", "https://search.patentsview.org/api/v1/patent/")
 PATENTSVIEW_REQUEST_DELAY = 1.5

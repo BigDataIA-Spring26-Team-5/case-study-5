@@ -1,10 +1,10 @@
 from typing import List, Dict, Optional
 from uuid import uuid4
 from datetime import datetime
-import logging
+import structlog
 from app.repositories.base import BaseRepository
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 class DocumentRepository(BaseRepository):
     """Repository for document metadata in Snowflake"""
@@ -354,6 +354,13 @@ class DocumentRepository(BaseRepository):
             finally:
                 cur.close()
 
+    def get_chunk_count_for_ticker(self, ticker: str) -> int:
+        """Return total chunk count across all documents for a ticker."""
+        stats = self.get_company_stats(ticker.upper())
+        if not stats:
+            return 0
+        return int(stats.get("chunks", 0) or 0)
+
     def get_all_company_stats(self) -> List[Dict]:
         """Get stats for all companies in a single grouped query."""
         sql = """
@@ -504,11 +511,3 @@ class DocumentRepository(BaseRepository):
                 cur.close()
 
 
-# Singleton
-_repo: Optional[DocumentRepository] = None
-
-def get_document_repository() -> DocumentRepository:
-    global _repo
-    if _repo is None:
-        _repo = DocumentRepository()
-    return _repo
