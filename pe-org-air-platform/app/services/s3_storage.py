@@ -2,6 +2,7 @@ import boto3
 import hashlib
 import logging
 from typing import Optional, Tuple
+from botocore.config import Config as BotocoreConfig
 from botocore.exceptions import ClientError
 from app.core.settings import settings
 
@@ -13,7 +14,12 @@ class S3StorageService:
             's3',
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID.get_secret_value(),
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY.get_secret_value(),
-            region_name=settings.AWS_REGION
+            region_name=settings.AWS_REGION,
+            config=BotocoreConfig(
+                connect_timeout=10,
+                read_timeout=30,
+                retries={"max_attempts": 2},
+            ),
         )
         self.bucket_name = settings.S3_BUCKET
         logger.info(f"S3 Storage initialized with bucket: {self.bucket_name}")

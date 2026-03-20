@@ -11,7 +11,12 @@ Subdirectory layout rule:
 from app.services.cache import get_cache
 from app.services.redis_cache import RedisCache
 from app.services.s3_storage import get_s3_service
-from app.repositories.base import get_snowflake_connection
+
+
+def get_snowflake_connection():
+    """Lazy import — defers snowflake-connector-python import until first DB call."""
+    from app.repositories.base import get_snowflake_connection as _get
+    return _get()
 
 
 def get_document_collector_service():
