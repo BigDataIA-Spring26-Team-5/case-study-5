@@ -153,6 +153,34 @@ def _create_singletons(app: FastAPI) -> None:
     else:
         app.state.task_store = TaskStore(redis_client=None)
 
+    # ── 7. CS5 — Agentic Portfolio Intelligence singletons ─────────────
+    from app.services.integration.cs1_client import CS1Client
+    from app.services.integration.cs3_client import CS3Client
+    from app.services.integration.cs4_client import CS4Client
+    from app.services.portfolio_data_service import PortfolioDataService
+    from app.services.tracking.history_service import AssessmentHistoryService
+    from app.services.analytics.fund_air import FundAIRCalculator
+
+    app.state.cs1_client = CS1Client()
+    app.state.cs3_client = CS3Client()
+    app.state.cs4_client = CS4Client(
+        justification_generator=app.state.justification_generator,
+        hybrid_retriever=app.state.hybrid_retriever,
+    )
+    app.state.portfolio_data_service = PortfolioDataService(
+        cs1_client=app.state.cs1_client,
+        cs2_client=app.state.cs2_client,
+        cs3_client=app.state.cs3_client,
+        cs4_client=app.state.cs4_client,
+        composite_scoring_service=app.state.composite_scoring_service,
+    )
+    app.state.history_service = AssessmentHistoryService(
+        cs3_client=app.state.cs3_client,
+    )
+    app.state.fund_air_calculator = FundAIRCalculator(
+        cs3_client=app.state.cs3_client,
+    )
+
 
 
 
