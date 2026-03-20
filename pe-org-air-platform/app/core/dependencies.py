@@ -132,6 +132,30 @@ def get_task_store(request: Request):
     return request.app.state.task_store
 
 
+def get_cs1_client(request: Request):
+    return request.app.state.cs1_client
+
+
+def get_cs3_client(request: Request):
+    return request.app.state.cs3_client
+
+
+def get_cs4_client(request: Request):
+    return request.app.state.cs4_client
+
+
+def get_portfolio_data_service(request: Request):
+    return request.app.state.portfolio_data_service
+
+
+def get_history_service(request: Request):
+    return request.app.state.history_service
+
+
+def get_fund_air_calculator(request: Request):
+    return request.app.state.fund_air_calculator
+
+
 from app.middleware.correlation import get_correlation_id
 
 
