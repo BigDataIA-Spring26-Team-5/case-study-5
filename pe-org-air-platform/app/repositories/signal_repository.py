@@ -192,13 +192,15 @@ class SignalRepository(BaseRepository):
                 cur.close()
 
     def get_summary_by_ticker(self, ticker: str) -> Optional[Dict]:
-        """Get signal summary by ticker."""
+        """Get signal summary by ticker (most recently updated if duplicates exist)."""
         sql = """
         SELECT company_id, ticker, technology_hiring_score, innovation_activity_score,
                digital_presence_score, leadership_signals_score, composite_score,
                signal_count, last_updated
         FROM company_signal_summaries
         WHERE ticker = %s
+        ORDER BY last_updated DESC NULLS LAST
+        LIMIT 1
         """
         with self.get_connection() as conn:
             cur = conn.cursor()

@@ -5,23 +5,31 @@ app/repositories/base.py
 Base repository class with Snowflake connection management and common utilities.
 """
 
-import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Generator, List, Optional
 from uuid import UUID
 
 import snowflake.connector
-from dotenv import load_dotenv
 from snowflake.connector import DictCursor
 from snowflake.connector.errors import DatabaseError, InterfaceError, ProgrammingError
 
-from app.core.exceptions import (
-    DatabaseConnectionException,
-    DuplicateEntityException,
-    ForeignKeyViolationException,
-    RepositoryException,
-)
+from app.core.settings import settings
+
+class RepositoryException(Exception):
+    """Base exception for repository-layer errors."""
+
+
+class DatabaseConnectionException(RepositoryException):
+    """Raised when a Snowflake connection cannot be established."""
+
+
+class DuplicateEntityException(RepositoryException):
+    """Raised on UNIQUE constraint violation."""
+
+
+class ForeignKeyViolationException(RepositoryException):
+    """Raised on FOREIGN KEY constraint violation."""
 
 
 def get_snowflake_connection() -> snowflake.connector.SnowflakeConnection:
@@ -29,15 +37,14 @@ def get_snowflake_connection() -> snowflake.connector.SnowflakeConnection:
     Snowflake connection factory.
     This is the single authoritative location for creating Snowflake connections.
     """
-    load_dotenv()
     return snowflake.connector.connect(
-        account=os.getenv("SNOWFLAKE_ACCOUNT"),
-        user=os.getenv("SNOWFLAKE_USER"),
-        password=os.getenv("SNOWFLAKE_PASSWORD"),
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-        database=os.getenv("SNOWFLAKE_DATABASE"),
-        schema=os.getenv("SNOWFLAKE_SCHEMA"),
-        role=os.getenv("SNOWFLAKE_ROLE"),
+        account=settings.SNOWFLAKE_ACCOUNT,
+        user=settings.SNOWFLAKE_USER,
+        password=settings.SNOWFLAKE_PASSWORD.get_secret_value(),
+        warehouse=settings.SNOWFLAKE_WAREHOUSE,
+        database=settings.SNOWFLAKE_DATABASE,
+        schema=settings.SNOWFLAKE_SCHEMA,
+        role=settings.SNOWFLAKE_ROLE,
     )
 
 
