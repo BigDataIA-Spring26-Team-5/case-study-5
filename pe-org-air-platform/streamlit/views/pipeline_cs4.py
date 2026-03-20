@@ -31,9 +31,9 @@ PIPELINE_STEPS = [
     ("SEC Filings",       "📄", "POST /api/v1/documents/collect — EDGAR + S3"),
     ("Parse Documents",   "🔍", "POST /api/v1/documents/parse/{ticker}"),
     ("Chunk Documents",   "✂️",  "POST /api/v1/documents/chunk/{ticker}"),
-    ("Signal Scoring",    "📡", "POST /api/v1/signals/score/{ticker}/all — sync"),
-    ("Glassdoor Culture", "💬", "POST /api/v1/glassdoor-signals/{ticker}"),
-    ("Board Governance",  "🏛️", "POST /api/v1/board-governance/analyze/{ticker}"),
+    ("Signal Scoring",    "📡", "POST /api/v1/signals/collect — all 6 categories"),
+    ("Glassdoor Culture", "💬", "Included in unified signal collection"),
+    ("Board Governance",  "🏛️", "Included in unified signal collection"),
     ("Scoring",           "🧮", "POST /api/v1/scoring/{ticker}"),
     ("Index Evidence",    "🗂️", "POST /rag/index/{ticker}?force=true"),
 ]

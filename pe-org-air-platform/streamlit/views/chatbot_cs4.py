@@ -403,7 +403,7 @@ def _get_chatbot_answer(ticker: str, question: str) -> tuple[str, list, str, flo
     """Get chatbot answer. If not indexed, auto-index first."""
     try:
         r = requests.get(
-            f"{BASE_URL}/rag/chatbot/{ticker}",
+            f"{BASE_URL}/api/v1/rag/chatbot/{ticker}",
             params={"question": question, "use_hyde": False},
         )
         if r.status_code == 200:
@@ -417,7 +417,7 @@ def _get_chatbot_answer(ticker: str, question: str) -> tuple[str, list, str, flo
                 if idx_result:
                     # Retry the question after indexing
                     r2 = requests.get(
-                        f"{BASE_URL}/rag/chatbot/{ticker}",
+                        f"{BASE_URL}/api/v1/rag/chatbot/{ticker}",
                         params={"question": question, "use_hyde": False},
                     )
                     if r2.status_code == 200:
@@ -462,7 +462,7 @@ def _auto_index_ticker(ticker: str) -> bool:
     """
     try:
         r = requests.post(
-            f"{BASE_URL}/rag/index/{ticker}",
+            f"{BASE_URL}/api/v1/rag/index/{ticker}",
             params={"force": "true", "min_confidence": "0"},
         )
         if r.status_code == 200:
