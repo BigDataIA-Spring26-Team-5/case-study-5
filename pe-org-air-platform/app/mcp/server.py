@@ -328,9 +328,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         else:
             raise ValueError(f"Unknown tool: {name}")
         return result
-    except Exception:
+    except Exception as e:
         status = "error"
-        raise
+        return {"error": f"{type(e).__name__}: {e}"}
     finally:
         _track(name, status, time.time() - start)
 
@@ -350,82 +350,83 @@ async def _calculate_org_air_score(args: dict) -> dict:
     assessment = await asyncio.to_thread(client.get_assessment, ticker)
     if not assessment:
         return {
-            "ticker": ticker,
-            "status": "not_found",
+            "company_id": ticker,
             "error": (
                 "No assessment found for this ticker. "
                 "Run POST /api/v1/scoring/orgair/portfolio first."
             ),
         }
     return {
-        "ticker": assessment.ticker,
-        "status": "success",
-        "org_air_score": assessment.org_air_score,
+        "company_id": assessment.ticker,
+        "org_air": assessment.org_air_score,
         "vr_score": assessment.valuation_risk,
         "hr_score": assessment.human_capital_risk,
-        "synergy": assessment.synergy,
-        "position_factor": assessment.position_factor,
-        "talent_concentration": assessment.talent_concentration,
+        "synergy_score": assessment.synergy,
+        "confidence_interval": list(getattr(assessment, "confidence_interval", (0.0, 0.0))),
         "dimension_scores": {
-            dim: {
-                "score": ds.score,
-                "level": ds.level,
-                "level_name": ds.level_name,
-            }
+            dim: ds.score
             for dim, ds in assessment.dimension_scores.items()
         },
     }
 
 
 async def _get_company_evidence(args: dict) -> dict:
-    """Delegates to CS2Client (fetches from S3 directly — needs AWS credentials)."""
+    """Calls FastAPI GET /api/v1/rag/evidence/{ticker} (requires FastAPI running)."""
+    import httpx
     ticker = args["company_id"].upper()
     dimension = args.get("dimension")
-    limit = int(args.get("limit", 50))
+    limit = int(args.get("limit", 10))
+    params = {"limit": limit}
+    if dimension:
+        params["dimension"] = dimension
+    url = f"http://localhost:8000/api/v1/rag/evidence/{ticker}"
 
-    dim_to_signal = {
-        "data_infrastructure": ["digital_presence"],
-        "ai_governance": ["governance_signals"],
-        "technology_stack": ["digital_presence", "technology_hiring"],
-        "talent": ["technology_hiring"],
-        "leadership": ["leadership_signals"],
-        "use_case_portfolio": ["innovation_activity"],
-        "culture": ["culture_signals"],
-    }
-    signal_cats = dim_to_signal.get(dimension) if dimension else None
+    def _fetch():
+        with httpx.Client(timeout=None) as client:
+            return client.get(url, params=params)
 
-    try:
-        client = await asyncio.to_thread(_cs2)
-        evidence = await asyncio.to_thread(client.get_evidence, ticker, signal_categories=signal_cats)
-    except Exception as e:
+    response = await asyncio.to_thread(_fetch)
+    if response.status_code != 200:
         return {
             "company_id": ticker,
             "dimension": dimension,
             "evidence": [],
             "count": 0,
-            "error": str(e),
+            "error": f"FastAPI returned {response.status_code}: {response.text[:300]}",
         }
-
-    items = [
-        {
-            "evidence_id": e.evidence_id,
-            "source_type": e.source_type,
-            "signal_category": e.signal_category,
-            "content": e.content[:500],
-            "confidence": e.confidence,
-        }
-        for e in evidence[:limit]
-    ]
-    return {"company_id": ticker, "dimension": dimension, "evidence": items, "count": len(items)}
+    data = response.json()
+    return {"evidence": data.get("evidence", []), "count": data.get("count", 0)}
 
 
 async def _generate_justification(args: dict) -> dict:
-    """Delegates to CS4Client (needs ChromaDB + Snowflake + LLM)."""
+    """Calls FastAPI GET /api/v1/rag/justify/{ticker}/{dimension} (requires FastAPI running)."""
+    import httpx
     ticker = args["company_id"].upper()
     dimension = args["dimension"]
-    client = await asyncio.to_thread(_cs4)
-    result = await asyncio.to_thread(client.generate_justification, ticker, dimension)
-    return result.to_dict()
+    url = f"http://localhost:8000/api/v1/rag/justify/{ticker}/{dimension}"
+
+    def _fetch():
+        with httpx.Client(timeout=None) as client:
+            return client.get(url)
+
+    response = await asyncio.to_thread(_fetch)
+    if response.status_code != 200:
+        return {
+            "company_id": ticker,
+            "dimension": dimension,
+            "error": f"FastAPI returned {response.status_code}: {response.text[:300]}",
+        }
+    data = response.json()
+    return {
+        "dimension": data.get("dimension", dimension),
+        "score": data.get("score"),
+        "level": data.get("level"),
+        "level_name": data.get("level_name"),
+        "evidence_strength": data.get("evidence_strength"),
+        "rubric_criteria": data.get("rubric_criteria"),
+        "supporting_evidence": data.get("supporting_evidence", []),
+        "gaps_identified": data.get("gaps_identified", []),
+    }
 
 
 async def _project_ebitda_impact(args: dict) -> dict:
@@ -442,7 +443,17 @@ async def _project_ebitda_impact(args: dict) -> dict:
         float(args["h_r_score"]),
         sector,
     )
-    return projection.to_dict()
+    net = projection.net_impact_pct
+    return {
+        "delta_air": float(projection.score_improvement),
+        "scenarios": {
+            "conservative": f"{net * 0.7:.2f}%",
+            "base": f"{net:.2f}%",
+            "optimistic": f"{net * 1.3:.2f}%",
+        },
+        "risk_adjusted": f"{projection.adjusted_net_impact_pct:.2f}%",
+        "requires_approval": projection.score_improvement > 20 or projection.adjusted_net_impact_pct > 10.0,
+    }
 
 
 async def _run_gap_analysis(args: dict) -> dict:
@@ -469,9 +480,7 @@ async def _run_gap_analysis(args: dict) -> dict:
 
 async def _get_portfolio_summary(args: dict) -> dict:
     """Aggregates all portfolio companies from CS3 (needs FastAPI running)."""
-    from app.services.composite_scoring_service import (
-        COMPANY_NAMES, COMPANY_SECTORS, MARKET_CAP_PERCENTILES,
-    )
+    from app.services.composite_scoring_service import COMPANY_SECTORS
     from app.config.company_mappings import CS3_PORTFOLIO
 
     fund_id = args.get("fund_id", "PE-FUND-I")
@@ -480,42 +489,21 @@ async def _get_portfolio_summary(args: dict) -> dict:
 
     for ticker in CS3_PORTFOLIO:
         assessment = await asyncio.to_thread(client.get_assessment, ticker)
-        org_air = vr = hr = synergy = pf = 0.0
-        dim_scores: dict = {}
-        if assessment:
-            org_air = assessment.org_air_score
-            vr = assessment.valuation_risk
-            hr = assessment.human_capital_risk
-            synergy = assessment.synergy
-            pf = assessment.position_factor
-            dim_scores = {dim: ds.score for dim, ds in assessment.dimension_scores.items()}
+        org_air = assessment.org_air_score if assessment else 0.0
         companies.append({
             "ticker": ticker,
-            "name": COMPANY_NAMES.get(ticker, ticker),
+            "org_air": org_air,
             "sector": COMPANY_SECTORS.get(ticker, ""),
-            "org_air_score": org_air,
-            "vr_score": vr,
-            "hr_score": hr,
-            "synergy": synergy,
-            "position_factor": pf,
-            "dimension_scores": dim_scores,
-            "market_cap_percentile": MARKET_CAP_PERCENTILES.get(ticker, 0.0),
         })
 
-    scores = [c["org_air_score"] for c in companies if c["org_air_score"] > 0]
-    vr_scores = [c["vr_score"] for c in companies if c["vr_score"] > 0]
-    hr_scores = [c["hr_score"] for c in companies if c["hr_score"] > 0]
-    avg = lambda lst: round(sum(lst) / len(lst), 2) if lst else 0.0
+    scores = [c["org_air"] for c in companies if c["org_air"] > 0]
+    avg = lambda lst: round(sum(lst) / len(lst), 1) if lst else 0.0
 
     return {
         "fund_id": fund_id,
+        "fund_air": avg(scores),
+        "company_count": len(companies),
         "companies": companies,
-        "fund_air_score": avg(scores),
-        "total_companies": len(companies),
-        "ai_leaders": sum(1 for c in companies if c["org_air_score"] >= 70),
-        "ai_laggards": sum(1 for c in companies if 0 < c["org_air_score"] < 50),
-        "avg_vr": avg(vr_scores),
-        "avg_hr": avg(hr_scores),
     }
 
 
