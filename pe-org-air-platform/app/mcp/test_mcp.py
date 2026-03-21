@@ -152,9 +152,18 @@ def print_menu():
     print("\n" + "=" * 55)
     print("  PE Org-AI-R MCP Tool Tester")
     print("=" * 55)
+    print("  -- Tools --")
     for num, cfg in TOOLS.items():
         print(f"  {num}. {cfg['name']}")
         print(f"     {cfg['description']}")
+    print("  -- Resources --")
+    print("  r1. List all resources")
+    print("  r2. Read orgair://parameters/v2.0")
+    print("  r3. Read orgair://sectors")
+    print("  -- Prompts --")
+    print("  p1. List all prompts")
+    print("  p2. Get due_diligence_assessment prompt")
+    print("  p3. Get ic_meeting_prep prompt")
     print("  q. Quit")
     print("=" * 55)
 
@@ -192,6 +201,34 @@ async def run_tool(session: ClientSession, tool_cfg: dict, args: dict):
         print(f"ERROR: {e}")
 
 
+async def run_resource(session: ClientSession, uri: str):
+    print(f"\n>>> Reading resource: {uri}\n")
+    try:
+        result = await session.read_resource(uri)
+        for content in result.contents:
+            try:
+                parsed = json.loads(content.text)
+                print(json.dumps(parsed, indent=2))
+            except (json.JSONDecodeError, AttributeError):
+                print(content)
+        print("\nSUCCESS")
+    except Exception as e:
+        print(f"ERROR: {e}")
+
+
+async def run_prompt(session: ClientSession, name: str):
+    company_id = input(f"  Ticker for '{name}' [NVDA]: ").strip() or "NVDA"
+    print(f"\n>>> Getting prompt: {name}  company_id={company_id}\n")
+    try:
+        result = await session.get_prompt(name, {"company_id": company_id})
+        for msg in result.messages:
+            print(f"[{msg.role}]")
+            print(msg.content.text)
+        print("\nSUCCESS")
+    except Exception as e:
+        print(f"ERROR: {e}")
+
+
 async def main():
     server_params = StdioServerParameters(
         command="python",
@@ -205,21 +242,47 @@ async def main():
 
             while True:
                 print_menu()
-                choice = input("Select a tool to test: ").strip().lower()
+                choice = input("Select an option: ").strip().lower()
 
                 if choice == "q":
                     print("Goodbye.")
                     break
 
-                if choice not in TOOLS:
-                    print(f"Invalid choice '{choice}'. Enter 1-6 or q.")
+                elif choice == "r1":
+                    result = await session.list_resources()
+                    print("\n>>> Resources:")
+                    for r in result.resources:
+                        print(f"  {r.uri}  —  {r.name}")
+                        print(f"    {r.description}")
+
+                elif choice == "r2":
+                    await run_resource(session, "orgair://parameters/v2.0")
+
+                elif choice == "r3":
+                    await run_resource(session, "orgair://sectors")
+
+                elif choice == "p1":
+                    result = await session.list_prompts()
+                    print("\n>>> Prompts:")
+                    for p in result.prompts:
+                        print(f"  {p.name}  —  {p.description}")
+
+                elif choice == "p2":
+                    await run_prompt(session, "due_diligence_assessment")
+
+                elif choice == "p3":
+                    await run_prompt(session, "ic_meeting_prep")
+
+                elif choice in TOOLS:
+                    tool_cfg = TOOLS[choice]
+                    args = collect_args(tool_cfg)
+                    await run_tool(session, tool_cfg, args)
+
+                else:
+                    print(f"Invalid choice '{choice}'.")
                     continue
 
-                tool_cfg = TOOLS[choice]
-                args = collect_args(tool_cfg)
-                await run_tool(session, tool_cfg, args)
-
-                again = input("\nRun another tool? (y/n) [y]: ").strip().lower()
+                again = input("\nRun another? (y/n) [y]: ").strip().lower()
                 if again == "n":
                     print("Goodbye.")
                     break

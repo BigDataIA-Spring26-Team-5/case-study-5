@@ -1,8 +1,16 @@
 """Application configuration with comprehensive validation."""
+import os as _os
 from typing import Optional, Literal, List
 from functools import lru_cache
 from pydantic import Field, field_validator, model_validator, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Absolute path to .env — resolves correctly regardless of CWD.
+# app/config/__init__.py → app/config/ → app/ → project_root/
+_ENV_FILE = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))),
+    ".env",
+)
 
 # Re-export company mappings for backward compatibility — existing code that
 # does `from app.config import COMPANY_NAME_MAPPINGS` continues to work.
@@ -23,7 +31,7 @@ class Settings(BaseSettings):
     """Application settings with production-grade validation."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

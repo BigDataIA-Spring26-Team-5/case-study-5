@@ -219,17 +219,21 @@ async def get_assessment(
     company_id = str(company["id"])
 
     # 2. Read composite scores from SCORING table
-    tc_vr_row = composite_repo.fetch_tc_vr_row(ticker)
-    orgair_row = composite_repo.fetch_orgair_row(ticker)
+    # Snowflake DictCursor returns uppercase keys — normalise to lowercase
+    def _norm(row):
+        return {k.lower(): v for k, v in row.items()} if row else None
 
-    tc = float(tc_vr_row["tc"]) if tc_vr_row and tc_vr_row.get("tc") is not None else 0.0
-    vr = float(tc_vr_row["vr"]) if tc_vr_row and tc_vr_row.get("vr") is not None else 0.0
-    pf = float(tc_vr_row["pf"]) if tc_vr_row and tc_vr_row.get("pf") is not None else 0.0
-    hr = float(tc_vr_row["hr"]) if tc_vr_row and tc_vr_row.get("hr") is not None else 0.0
+    tc_vr_row = _norm(composite_repo.fetch_tc_vr_row(ticker))
+    orgair_row = _norm(composite_repo.fetch_orgair_row(ticker))
+
+    tc      = float(tc_vr_row["tc"])  if tc_vr_row and tc_vr_row.get("tc")  is not None else 0.0
+    vr      = float(tc_vr_row["vr"])  if tc_vr_row and tc_vr_row.get("vr")  is not None else 0.0
+    pf      = float(tc_vr_row["pf"])  if tc_vr_row and tc_vr_row.get("pf")  is not None else 0.0
+    hr      = float(tc_vr_row["hr"])  if tc_vr_row and tc_vr_row.get("hr")  is not None else 0.0
     org_air = float(orgair_row["org_air"]) if orgair_row and orgair_row.get("org_air") is not None else 0.0
     synergy = 0.0
 
-    # Prefer more detailed orgair row fields when available
+    # Prefer the more detailed orgair row columns when available
     if orgair_row:
         if orgair_row.get("vr_score") is not None:
             vr = float(orgair_row["vr_score"])

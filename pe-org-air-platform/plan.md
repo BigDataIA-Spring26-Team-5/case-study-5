@@ -47,16 +47,16 @@
 | 3 | 4 | Assessment History Tracking | 6 | DONE |
 | 4 | 11 | Fund-AI-R Calculator | 5 | DONE |
 | 5 | 12 | Prometheus Metrics | 5 | DONE |
-| 6 | 2 | MCP Server Core (6 tools) | 12 | **TODO — START HERE** |
-| 7 | 3 | MCP Resources & Prompts | 8 | TODO |
-| 8 | 7 | LangGraph State | 8 | TODO |
-| 9 | 8 | Specialist Agents | 12 | TODO |
-| 10 | 9 | Supervisor + HITL | 10 | TODO |
-| 11 | 5 | Evidence Display Component | 6 | TODO |
+| 6 | 2 | MCP Server Core (6 tools) | 12 |DONE |
+| 7 | 3 | MCP Resources & Prompts | 8 | DONE |
+| 8 | 7 | LangGraph State | 8 | DONE |
+| 9 | 8 | Specialist Agents | 12 | DONE |
+| 10 | 9 | Supervisor + HITL | 10 | DONE |
+| 11 | 5 | Evidence Display Component | 6 | **TODO — START HERE** |
 | 12 | 6 | Portfolio Dashboard (cs5_app.py) | 10 | TODO |
 | 13 | 10 | DD Workflow Exercise | 10 | TODO |
 
-**Done: 24 pts | Remaining: 76 pts**
+**Done: 74 pts | Remaining: 26 pts**
 
 ---
 

@@ -508,6 +508,159 @@ async def _get_portfolio_summary(args: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Resources — addressable data exposed to the LLM
+# ---------------------------------------------------------------------------
+
+@server.list_resources()
+async def list_resources() -> list[types.Resource]:
+    return [
+        types.Resource(
+            uri="orgair://parameters/v2.0",
+            name="Org-AI-R Scoring Parameters v2.0",
+            description=(
+                "Current scoring parameters: ALPHA_VR_WEIGHT, BETA_SYNERGY_WEIGHT, "
+                "dimension weights, and HITL thresholds from app config."
+            ),
+        ),
+        types.Resource(
+            uri="orgair://sectors",
+            name="Sector Definitions",
+            description=(
+                "Sector baselines, EBITDA multipliers, and dimension weights "
+                "for the 5 PE portfolio companies (NVDA, JPM, WMT, GE, DG)."
+            ),
+        ),
+    ]
+
+
+@server.read_resource()
+async def read_resource(uri: str) -> str:
+    import json as _json
+    uri = str(uri).rstrip("/")
+    if uri == "orgair://parameters/v2.0":
+        from app.core.settings import settings
+        return _json.dumps({
+            "version": "2.0",
+            "alpha_vr_weight": settings.ALPHA_VR_WEIGHT,
+            "beta_synergy_weight": settings.BETA_SYNERGY_WEIGHT,
+            "lambda_penalty": settings.LAMBDA_PENALTY,
+            "delta_position": settings.DELTA_POSITION,
+            "dimension_weights": {
+                "data_infrastructure": settings.W_DATA_INFRA,
+                "ai_governance": settings.W_AI_GOVERNANCE,
+                "technology_stack": settings.W_TECH_STACK,
+                "talent": settings.W_TALENT,
+                "leadership": settings.W_LEADERSHIP,
+                "use_case_portfolio": settings.W_USE_CASES,
+                "culture": settings.W_CULTURE,
+            },
+            "hitl_thresholds": {
+                "score_change": settings.HITL_SCORE_CHANGE_THRESHOLD,
+                "ebitda_projection": settings.HITL_EBITDA_PROJECTION_THRESHOLD,
+            },
+        })
+    if uri == "orgair://sectors":
+        from app.services.composite_scoring_service import COMPANY_SECTORS, COMPANY_NAMES
+        from app.services.value_creation.ebitda import SECTOR_EBITDA_MULTIPLIERS, IMPLEMENTATION_COST_FACTOR
+        return _json.dumps({
+            "portfolio_companies": {
+                ticker: {
+                    "name": COMPANY_NAMES.get(ticker, ticker),
+                    "sector": sector,
+                    "ebitda_multiplier": SECTOR_EBITDA_MULTIPLIERS.get(sector, 0.30),
+                    "implementation_cost_factor": IMPLEMENTATION_COST_FACTOR.get(sector, 0.10),
+                }
+                for ticker, sector in COMPANY_SECTORS.items()
+            },
+            "sector_baselines": {
+                "technology": {"h_r_base": 85, "weight_talent": 0.18},
+                "financial_services": {"h_r_base": 72, "weight_governance": 0.18},
+                "retail": {"h_r_base": 57, "weight_use_cases": 0.15},
+                "manufacturing": {"h_r_base": 52, "weight_data_infra": 0.20},
+            },
+        })
+    return "{}"
+
+
+# ---------------------------------------------------------------------------
+# Prompts — reusable workflow templates
+# ---------------------------------------------------------------------------
+
+@server.list_prompts()
+async def list_prompts() -> list[types.Prompt]:
+    return [
+        types.Prompt(
+            name="due_diligence_assessment",
+            description="Complete due diligence assessment for a portfolio company",
+            arguments=[
+                types.PromptArgument(name="company_id", description="Ticker symbol (NVDA, JPM, WMT, GE, DG)", required=True),
+            ],
+        ),
+        types.Prompt(
+            name="ic_meeting_prep",
+            description="Prepare Investment Committee meeting package for a company",
+            arguments=[
+                types.PromptArgument(name="company_id", description="Ticker symbol (NVDA, JPM, WMT, GE, DG)", required=True),
+            ],
+        ),
+    ]
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: dict) -> types.GetPromptResult:
+    company_id = (arguments or {}).get("company_id", "<company_id>")
+    if name == "due_diligence_assessment":
+        return types.GetPromptResult(
+            description=f"Due diligence assessment for {company_id}",
+            messages=[
+                types.PromptMessage(
+                    role="user",
+                    content=types.TextContent(
+                        type="text",
+                        text=(
+                            f"Perform a full due diligence assessment for {company_id}:\n"
+                            f"1. Calculate the Org-AI-R score using calculate_org_air_score\n"
+                            f"2. For any dimensions scoring below 60, call generate_justification "
+                            f"to understand the evidence and gaps\n"
+                            f"3. Run gap analysis with run_gap_analysis targeting org_air=75\n"
+                            f"4. Project EBITDA impact using project_ebitda_impact with the "
+                            f"current score as entry_score and 75 as target_score\n"
+                            f"5. Summarise findings: strengths, gaps, and value-creation actions"
+                        ),
+                    ),
+                ),
+            ],
+        )
+    if name == "ic_meeting_prep":
+        return types.GetPromptResult(
+            description=f"IC meeting preparation package for {company_id}",
+            messages=[
+                types.PromptMessage(
+                    role="user",
+                    content=types.TextContent(
+                        type="text",
+                        text=(
+                            f"Prepare an Investment Committee package for {company_id}:\n"
+                            f"1. Retrieve the portfolio summary with get_portfolio_summary to "
+                            f"benchmark {company_id} against the fund\n"
+                            f"2. Get the full Org-AI-R score with calculate_org_air_score\n"
+                            f"3. Pull supporting evidence with get_company_evidence for the "
+                            f"top 2 strongest and weakest dimensions\n"
+                            f"4. Generate justifications with generate_justification for each "
+                            f"of those dimensions\n"
+                            f"5. Project EBITDA impact across conservative / base / optimistic "
+                            f"scenarios using project_ebitda_impact\n"
+                            f"6. Produce a one-page IC memo: executive summary, score vs peers, "
+                            f"key risks, and recommended value-creation initiatives"
+                        ),
+                    ),
+                ),
+            ],
+        )
+    return types.GetPromptResult(description=name, messages=[])
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

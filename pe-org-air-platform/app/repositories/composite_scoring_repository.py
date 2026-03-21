@@ -54,8 +54,12 @@ class CompositeScoringRepository(BaseRepository):
         return self._query(ticker, ["ticker", "hr", "scored_at", "updated_at"])
 
     def fetch_orgair_row(self, ticker: str) -> Optional[Dict]:
-        """Fetch ORG_AIR column for one ticker."""
-        return self._query(ticker, ["ticker", "org_air", "scored_at", "updated_at"])
+        """Fetch ORG_AIR and all composite score columns for one ticker."""
+        return self._query(ticker, [
+            "ticker", "org_air", "vr_score", "hr_score", "synergy_score",
+            "talent_concentration", "position_factor", "ci_lower", "ci_upper",
+            "scored_at", "updated_at",
+        ])
 
     # =====================================================================
     # WRITE — upsert into SCORING (main table)
