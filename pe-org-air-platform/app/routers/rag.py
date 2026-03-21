@@ -523,8 +523,23 @@ class JustifyResponse(BaseModel):
     level_name: str
     generated_summary: str
     evidence_strength: str
+    rubric_criteria: str
     supporting_evidence: List[Dict[str, Any]]
     gaps_identified: List[str]
+
+
+class EvidenceItemResponse(BaseModel):
+    source_type: str
+    content: str
+    confidence: float
+    signal_category: str
+
+
+class CompanyEvidenceListResponse(BaseModel):
+    company_id: str
+    dimension: Optional[str]
+    count: int
+    evidence: List[EvidenceItemResponse]
 
 
 class ICPrepResponse(BaseModel):
@@ -719,6 +734,43 @@ async def search_evidence(
     ]
 
 
+@router.get("/evidence/{ticker}", response_model=CompanyEvidenceListResponse)
+async def get_company_evidence_items(
+    ticker: str,
+    dimension: Optional[str] = Query(None, description="V^R dimension filter (e.g. talent, culture)"),
+    limit: int = Query(10, ge=1, le=200, description="Max evidence items to return"),
+    cs2: CS2Client = Depends(_get_cs2),
+):
+    """Return individual CS2 evidence items for a company, optionally filtered by V^R dimension."""
+    ticker = ticker.upper()
+    dim_to_signal = {
+        "data_infrastructure": ["digital_presence"],
+        "ai_governance": ["governance_signals"],
+        "technology_stack": ["digital_presence", "technology_hiring"],
+        "talent": ["technology_hiring"],
+        "leadership": ["leadership_signals"],
+        "use_case_portfolio": ["innovation_activity"],
+        "culture": ["culture_signals"],
+    }
+    signal_cats = dim_to_signal.get(dimension) if dimension else None
+    evidence = await asyncio.to_thread(cs2.get_evidence, ticker, signal_categories=signal_cats)
+    items = [
+        EvidenceItemResponse(
+            source_type=e.source_type,
+            content=e.content[:500],
+            confidence=e.confidence,
+            signal_category=e.signal_category,
+        )
+        for e in evidence[:limit]
+    ]
+    return CompanyEvidenceListResponse(
+        company_id=ticker,
+        dimension=dimension,
+        count=len(items),
+        evidence=items,
+    )
+
+
 @router.get("/justify/{ticker}/{dimension}", response_model=JustifyResponse)
 async def justify_score(
     ticker: str,
@@ -734,7 +786,7 @@ async def justify_score(
         j = await asyncio.to_thread(gen.generate_justification, ticker, dimension)
     except Exception as e:
         logger.error("rag.justify_error", ticker=ticker, dimension=dimension, error=str(e))
-        raise ExternalServiceError("rag", "An internal error occurred during RAG processing.")
+        raise ExternalServiceError("rag", f"{type(e).__name__}: {e}")
 
     return JustifyResponse(
         ticker=j.company_id,
@@ -744,15 +796,12 @@ async def justify_score(
         level_name=j.level_name,
         generated_summary=j.generated_summary,
         evidence_strength=j.evidence_strength,
+        rubric_criteria=j.rubric_criteria,
         supporting_evidence=[
             {
-                "evidence_id": e.evidence_id,
-                "content": e.content,
                 "source_type": e.source_type,
-                "source_url": e.source_url,
+                "content": e.content[:300],
                 "confidence": e.confidence,
-                "matched_keywords": e.matched_keywords,
-                "relevance_score": e.relevance_score,
             }
             for e in j.supporting_evidence[:5]
         ],

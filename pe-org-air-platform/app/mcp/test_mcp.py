@@ -51,11 +51,8 @@ FASTAPI_URL = "http://localhost:8000"
 # Tools that make HTTP calls to FastAPI
 NEEDS_FASTAPI = {
     "calculate_org_air_score", "run_gap_analysis", "get_portfolio_summary",
+    "generate_justification", "get_company_evidence",
 }
-# Tools that call AWS S3 directly
-NEEDS_S3 = {"get_company_evidence"}
-# Tools that need ChromaDB + Snowflake + LLM
-NEEDS_RAG = {"generate_justification"}
 
 
 def check_fastapi() -> bool:
@@ -65,21 +62,6 @@ def check_fastapi() -> bool:
     except Exception:
         return False
 
-
-def check_s3() -> bool:
-    """Try to import boto3 and create a client — does NOT make a network call."""
-    try:
-        import boto3
-        from app.core.settings import settings
-        boto3.client(
-            "s3",
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID.get_secret_value(),
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY.get_secret_value(),
-            region_name=settings.AWS_REGION,
-        )
-        return True
-    except Exception:
-        return False
 
 # ---------------------------------------------------------------------------
 # Tool menu: name → (description, default arguments, timeout)
@@ -95,7 +77,7 @@ TOOLS = {
     },
     "2": {
         "name": "get_company_evidence",
-        "description": "Retrieve CS2 evidence for a company (requires S3)",
+        "description": "Retrieve CS2 evidence for a company (requires FastAPI running)",
         "defaults": {"company_id": "NVDA", "limit": 5},
         "prompts": [
             ("company_id", "Ticker", str),
@@ -106,7 +88,7 @@ TOOLS = {
     },
     "3": {
         "name": "generate_justification",
-        "description": "Generate RAG justification for a dimension (requires ChromaDB + Snowflake + LLM)",
+        "description": "Generate RAG justification for a dimension (requires FastAPI running)",
         "defaults": {"company_id": "NVDA", "dimension": "talent"},
         "prompts": [
             ("company_id", "Ticker", str),
@@ -189,23 +171,23 @@ async def run_tool(session: ClientSession, tool_cfg: dict, args: dict):
             print("  Start it with:  uvicorn app.main:app --reload")
             print("  Proceeding anyway — tool will likely timeout.\n")
 
-    if tool_name in NEEDS_S3:
-        if check_s3():
-            print("  S3 credentials look valid (client created)")
-        else:
-            print("  WARNING: S3 client could not be created — check AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / S3_BUCKET in .env")
-            print("  Proceeding anyway — server will return an error within 20s.\n")
 
     print(f"\n>>> Calling: {tool_cfg['name']}")
     print(f"    Args: {json.dumps(args, indent=2)}")
     print("    Waiting for response (no timeout)...\n")
     try:
         result = await session.call_tool(tool_cfg["name"], args)
-        raw = result.content[0].text
-        parsed = json.loads(raw)
-        print("Result:")
-        print(json.dumps(parsed, indent=2))
-        print("\nSUCCESS")
+        raw = result.content[0].text if result.content else ""
+        if not raw:
+            print("ERROR: empty response from server")
+            return
+        try:
+            parsed = json.loads(raw)
+            print("Result:")
+            print(json.dumps(parsed, indent=2))
+            print("\nSUCCESS")
+        except json.JSONDecodeError:
+            print(f"SERVER ERROR: {raw}")
     except Exception as e:
         print(f"ERROR: {e}")
 
