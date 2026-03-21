@@ -130,7 +130,7 @@ class JustificationGenerator:
             {"role": "user", "content": prompt},
         ]
         try:
-            summary = self.router.complete("justification_generation", messages)
+            summary = self.router.complete_sync("justification_generation", messages)
         except Exception as e:
             summary = f"[Summary generation unavailable: {e}]"
         summary = self._verify_citations(summary, cited)
