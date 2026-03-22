@@ -242,82 +242,89 @@ def render_evidence_summary_table(justifications: Dict[str, Dict[str, Any]]) -> 
 # render_company_evidence_panel — full interactive panel with buttons
 # ---------------------------------------------------------------------------
 
-def render_company_evidence_panel(ticker: str) -> None:
+def render_company_evidence_panel(
+    company_id: str,
+    justifications: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> None:
     """Interactive evidence panel for a company.
 
-    Includes:
-    - Per-dimension "Generate" buttons (calls FastAPI on demand)
-    - "Generate All 7 Dimensions" batch button
-    - Summary metrics + table
-    - Tabbed view per dimension
+    CS5 spec: receives pre-fetched justifications dict. If not provided,
+    shows generate buttons to fetch via FastAPI.
+
+    Args:
+        company_id: ticker symbol
+        justifications: pre-fetched Dict[dimension, JustifyResponse dict].
+                        If None, shows interactive fetch UI.
     """
+    ticker = company_id
     st.header(f"Evidence Analysis: {ticker}")
 
     cache_key_all = f"justifications_{ticker}"
 
-    # ── Batch generate button ─────────────────────────────────────────────────
-    col_btn, col_clear = st.columns([2, 1])
-    with col_btn:
-        if st.button(
-            "Generate All 7 Dimensions",
-            key=f"gen_all_{ticker}",
-            type="primary",
-            use_container_width=True,
-        ):
-            # Clear existing cache so we re-fetch fresh
-            for dim in DIMENSIONS:
-                st.session_state.pop(f"justification_{ticker}_{dim}", None)
-            st.session_state.pop(cache_key_all, None)
-            justifications = fetch_all_justifications(ticker)
-            st.session_state[cache_key_all] = justifications
+    # If pre-fetched data was passed in, use it directly (CS5 spec path)
+    if justifications is not None:
+        st.session_state[cache_key_all] = justifications
+    else:
+        # Interactive fetch UI (utility path)
+        col_btn, col_clear = st.columns([2, 1])
+        with col_btn:
+            if st.button(
+                "Generate All 7 Dimensions",
+                key=f"gen_all_{ticker}",
+                type="primary",
+                use_container_width=True,
+            ):
+                for dim in DIMENSIONS:
+                    st.session_state.pop(f"justification_{ticker}_{dim}", None)
+                st.session_state.pop(cache_key_all, None)
+                fetched = fetch_all_justifications(ticker)
+                st.session_state[cache_key_all] = fetched
 
-    with col_clear:
-        if st.button(
-            "Clear Cache",
-            key=f"clear_{ticker}",
-            type="secondary",
-            use_container_width=True,
-        ):
-            for dim in DIMENSIONS:
-                st.session_state.pop(f"justification_{ticker}_{dim}", None)
-            st.session_state.pop(cache_key_all, None)
-            st.rerun()
+        with col_clear:
+            if st.button(
+                "Clear Cache",
+                key=f"clear_{ticker}",
+                type="secondary",
+                use_container_width=True,
+            ):
+                for dim in DIMENSIONS:
+                    st.session_state.pop(f"justification_{ticker}_{dim}", None)
+                st.session_state.pop(cache_key_all, None)
+                st.rerun()
 
-    justifications: Dict[str, Dict[str, Any]] = st.session_state.get(cache_key_all, {})
+        st.markdown("---")
+        st.markdown("**Generate a single dimension:**")
+        sel_col, btn_col = st.columns([3, 1])
+        with sel_col:
+            selected_dim = st.selectbox(
+                "Dimension",
+                DIMENSIONS,
+                format_func=lambda d: d.replace("_", " ").title(),
+                key=f"dim_select_{ticker}",
+                label_visibility="collapsed",
+            )
+        with btn_col:
+            if st.button(
+                "Generate",
+                key=f"gen_single_{ticker}",
+                use_container_width=True,
+            ):
+                st.session_state.pop(f"justification_{ticker}_{selected_dim}", None)
+                with st.spinner(f"Generating {selected_dim}..."):
+                    data = fetch_justification(ticker, selected_dim)
+                if data:
+                    cached = st.session_state.get(cache_key_all, {})
+                    cached[selected_dim] = data
+                    st.session_state[cache_key_all] = cached
+                    st.success(f"{selected_dim} generated.")
 
-    # ── Per-dimension selector with individual Generate button ─────────────────
-    st.markdown("---")
-    st.markdown("**Generate a single dimension:**")
-    sel_col, btn_col = st.columns([3, 1])
-    with sel_col:
-        selected_dim = st.selectbox(
-            "Dimension",
-            DIMENSIONS,
-            format_func=lambda d: d.replace("_", " ").title(),
-            key=f"dim_select_{ticker}",
-            label_visibility="collapsed",
-        )
-    with btn_col:
-        if st.button(
-            "Generate",
-            key=f"gen_single_{ticker}",
-            use_container_width=True,
-        ):
-            # Remove cached entry so fetch_justification re-fetches
-            st.session_state.pop(f"justification_{ticker}_{selected_dim}", None)
-            with st.spinner(f"Generating {selected_dim}..."):
-                data = fetch_justification(ticker, selected_dim)
-            if data:
-                justifications[selected_dim] = data
-                st.session_state[cache_key_all] = justifications
-                st.success(f"{selected_dim} generated.")
+    justifications = st.session_state.get(cache_key_all, {})
 
-    # ── Nothing generated yet ─────────────────────────────────────────────────
     if not justifications:
         st.info("Click **Generate All 7 Dimensions** or select a dimension above to start.")
         return
 
-    # ── Summary metrics — all values read directly from API response ──────────
+    # ── Summary metrics ───────────────────────────────────────────────────────
     st.markdown("---")
     levels         = [int(j.get("level", 3)) for j in justifications.values()]
     avg_level      = sum(levels) / len(levels) if levels else 0
