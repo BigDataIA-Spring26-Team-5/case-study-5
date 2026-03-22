@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any
 
+from app.services.integration.cs1_client import CS1Client
 from app.services.integration.cs3_client import CS3Client, DIMENSIONS
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ class AssessmentSnapshot:
     dimension_scores: Dict[str, float] = field(default_factory=dict)
     confidence: float = 0.0
     timestamp: str = ""
-    assessor: str = "system"
+    assessor_id: str = "system"
     assessment_type: str = "automated"
 
     def __post_init__(self):
@@ -52,7 +53,8 @@ class AssessmentTrend:
 class AssessmentHistoryService:
     """Tracks assessment history with in-memory cache."""
 
-    def __init__(self, cs3_client: CS3Client):
+    def __init__(self, cs1_client: CS1Client, cs3_client: CS3Client):
+        self.cs1 = cs1_client
         self.cs3 = cs3_client
         self._history: Dict[str, List[AssessmentSnapshot]] = defaultdict(list)
 
@@ -89,7 +91,7 @@ class AssessmentHistoryService:
             hr_score=hr,
             synergy=synergy,
             dimension_scores=dim_scores,
-            assessor=assessor_id,
+            assessor_id=assessor_id,
             assessment_type=assessment_type,
         )
 
@@ -160,3 +162,8 @@ class AssessmentHistoryService:
             direction=direction,
             snapshot_count=len(snapshots),
         )
+
+
+def create_history_service(cs1: CS1Client, cs3: CS3Client) -> AssessmentHistoryService:
+    """Factory function for AssessmentHistoryService."""
+    return AssessmentHistoryService(cs1_client=cs1, cs3_client=cs3)
