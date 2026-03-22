@@ -395,14 +395,13 @@ class ScoringAgent:
 
         org_air = score_data.get("org_air", 0.0)
 
-        # HITL gate: large score change triggers human review
-        requires_approval = False
+        # HITL gate: score outside normal operating range triggers human review
+        requires_approval = org_air > 85 or org_air < 40
         approval_reason: Optional[str] = None
-        if org_air >= self.hitl_threshold:
-            requires_approval = True
+        if requires_approval:
             approval_reason = (
-                f"Org-AI-R score {org_air:.1f} exceeds HITL threshold "
-                f"({self.hitl_threshold}).  Human review required before proceeding."
+                f"Score {org_air:.1f} outside normal range [40, 85].  "
+                "Human review required before proceeding."
             )
             logger.warning("HITL triggered for %s: score=%.1f", company_id, org_air)
 
@@ -446,23 +445,26 @@ class EvidenceAgent:
 
     def __call__(self, state: DueDiligenceState) -> Dict[str, Any]:
         company_id = state["company_id"]
-        logger.info("EvidenceAgent (talent) started for %s", company_id)
+        logger.info("EvidenceAgent started for %s", company_id)
 
-        # Fetch talent-dimension evidence
-        try:
-            evidence_data = self.tools.get_company_evidence(
-                company_id, dimension="talent", limit=10
-            )
-        except Exception as exc:
-            error_msg = f"Talent evidence fetch failed: {exc}"
-            logger.error(error_msg)
-            return {
-                "talent_analysis": {"error": error_msg, "company_id": company_id},
-                "messages": _append_message(self.NAME, self.NAME, error_msg),
-                "error": error_msg,
-            }
+        # Fetch evidence for the 3 key dimensions per CS5 spec
+        dimensions = ["data_infrastructure", "talent", "use_case_portfolio"]
+        all_evidence_items: List[Dict[str, Any]] = []
+        dimension_evidence: Dict[str, List[Dict[str, Any]]] = {}
 
-        evidence_items: List[Dict[str, Any]] = evidence_data.get("evidence", [])
+        for dim in dimensions:
+            try:
+                evidence_data = self.tools.get_company_evidence(
+                    company_id, dimension=dim, limit=5
+                )
+                items = evidence_data.get("evidence", [])
+                dimension_evidence[dim] = items
+                all_evidence_items.extend(items)
+            except Exception as exc:
+                logger.warning("Evidence fetch failed for %s/%s: %s", company_id, dim, exc)
+                dimension_evidence[dim] = []
+
+        evidence_items = all_evidence_items
 
         # Filter to technology_hiring signals
         tech_hiring = [
@@ -470,11 +472,11 @@ class EvidenceAgent:
             if item.get("signal_category") == "technology_hiring"
         ]
 
-        # LLM summarises talent / technology hiring signals
+        # LLM summarises multi-dimension evidence
         talent_text = "\n".join(
-            f"- {item.get('content', '')[:300]}"
-            for item in (tech_hiring or evidence_items)[:6]
-        ) or "No talent evidence available."
+            f"- [{item.get('dimension', '?')}] {item.get('content', '')[:300]}"
+            for item in (evidence_items)[:8]
+        ) or "No evidence available."
 
         messages = [
             {
@@ -501,16 +503,18 @@ class EvidenceAgent:
         result: Dict[str, Any] = {
             "company_id": company_id,
             "evidence": evidence_items,
+            "dimension_evidence": dimension_evidence,
             "technology_hiring_signals": tech_hiring,
             "llm_summary": summary,
         }
 
         logger.info(
-            "EvidenceAgent completed for %s (%d talent items, %d tech-hiring)",
-            company_id, len(evidence_items), len(tech_hiring),
+            "EvidenceAgent completed for %s (%d items across %d dimensions, %d tech-hiring)",
+            company_id, len(evidence_items), len(dimensions), len(tech_hiring),
         )
         return {
             "talent_analysis": result,
+            "evidence_justifications": dimension_evidence,
             "messages": _append_message(self.NAME, self.NAME, summary),
         }
 
