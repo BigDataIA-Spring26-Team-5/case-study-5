@@ -10,8 +10,10 @@ Run with:  python -m app.mcp.server
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 import mcp.types as types
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 server = Server(
-    name="pe-org-air",
+    name="pe-orgair-server",
     version="1.0.0",
     instructions=(
         "Portfolio intelligence tools for the PE Org-AI-R platform. "
@@ -45,6 +47,7 @@ server = Server(
 _ebitda_calc = None
 _gap_analyzer = None
 _composite_svc = None
+_portfolio_svc = None
 
 # Module-level client references (None until first use).
 # Exposed at module level so grader tests can patch them:
@@ -53,6 +56,10 @@ _composite_svc = None
 cs3_client = None
 cs2_client = None
 cs4_client = None
+
+# Module-level references for value-creation services
+ebitda_calculator = None   # set by _ebitda()
+gap_analyzer = None        # set by _gap()
 
 
 def _ebitda() -> Any:
@@ -110,6 +117,21 @@ def _cs4() -> Any:
     return cs4_client
 
 
+def _portfolio() -> Any:
+    global _portfolio_svc
+    if _portfolio_svc is None:
+        from app.services.integration.cs1_client import CS1Client
+        from app.services.portfolio_data_service import PortfolioDataService
+        _portfolio_svc = PortfolioDataService(
+            cs1_client=CS1Client(),
+            cs2_client=_cs2(),
+            cs3_client=_cs3(),
+            cs4_client=_cs4(),
+            composite_scoring_service=_composite(),
+        )
+    return _portfolio_svc
+
+
 def _track(name: str, status: str, duration: float) -> None:
     """Best-effort Prometheus metric recording — silently skips if unavailable."""
     try:
@@ -163,11 +185,12 @@ TOOLS = [
                 "dimension": {
                     "type": "string",
                     "description": (
-                        "Optional V^R dimension filter. One of: data_infrastructure, "
+                        "Optional V^R dimension filter. One of: all, data_infrastructure, "
                         "ai_governance, technology_stack, talent, leadership, "
-                        "use_case_portfolio, culture."
+                        "use_case_portfolio, culture. Defaults to 'all'."
                     ),
                     "enum": [
+                        "all",
                         "data_infrastructure",
                         "ai_governance",
                         "technology_stack",
@@ -313,7 +336,7 @@ async def list_tools() -> list[types.Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
     """Dispatch each tool to only the components it actually needs."""
     start = time.time()
     status = "success"
@@ -332,10 +355,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             result = await _get_portfolio_summary(arguments)
         else:
             raise ValueError(f"Unknown tool: {name}")
-        return result
+        return [types.TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
     except Exception as e:
         status = "error"
-        return {"error": f"{type(e).__name__}: {e}"}
+        logger.error("mcp_tool_error", tool=name, error=str(e))
+        return [types.TextContent(type="text", text=json.dumps({"error": f"{type(e).__name__}: {e}"}))]
     finally:
         _track(name, status, time.time() - start)
 
@@ -361,13 +385,37 @@ async def _calculate_org_air_score(args: dict) -> dict:
                 "Run POST /api/v1/scoring/orgair/portfolio first."
             ),
         }
+
+    # The dimensions endpoint may not include org_air_score; fall back to
+    # the SCORING table (same source as MCPToolCaller.calculate_org_air_score).
+    org_air = assessment.org_air_score
+    vr = assessment.valuation_risk
+    hr = assessment.human_capital_risk
+    synergy = assessment.synergy
+    ci = list(getattr(assessment, "confidence_interval", (0.0, 0.0)))
+
+    if org_air == 0.0:
+        from app.repositories.composite_scoring_repository import CompositeScoringRepository
+        repo = CompositeScoringRepository()
+        row = await asyncio.to_thread(
+            repo._query, ticker,
+            ["ticker", "org_air", "vr_score", "hr_score", "synergy_score", "ci_lower", "ci_upper"],
+        )
+        if row:
+            row = {k.lower(): v for k, v in row.items()}
+            org_air = float(row.get("org_air") or 0.0)
+            vr = float(row.get("vr_score") or vr)
+            hr = float(row.get("hr_score") or hr)
+            synergy = float(row.get("synergy_score") or synergy)
+            ci = [float(row.get("ci_lower") or 0.0), float(row.get("ci_upper") or 0.0)]
+
     return {
         "company_id": assessment.ticker,
-        "org_air": assessment.org_air_score,
-        "vr_score": assessment.valuation_risk,
-        "hr_score": assessment.human_capital_risk,
-        "synergy_score": assessment.synergy,
-        "confidence_interval": list(getattr(assessment, "confidence_interval", (0.0, 0.0))),
+        "org_air": org_air,
+        "vr_score": vr,
+        "hr_score": hr,
+        "synergy_score": synergy,
+        "confidence_interval": ci,
         "dimension_scores": {
             dim: ds.score
             for dim, ds in assessment.dimension_scores.items()
@@ -380,6 +428,8 @@ async def _get_company_evidence(args: dict) -> dict:
     import httpx
     ticker = args["company_id"].upper()
     dimension = args.get("dimension")
+    if dimension == "all":
+        dimension = None  # "all" means no filter
     limit = int(args.get("limit", 10))
     params = {"limit": limit}
     if dimension:
@@ -485,34 +535,21 @@ async def _run_gap_analysis(args: dict) -> dict:
 
 
 async def _get_portfolio_summary(args: dict) -> dict:
-    """Aggregates all portfolio companies from CS3 (needs FastAPI running)."""
-    from app.services.composite_scoring_service import COMPANY_SECTORS
-    from app.config.company_mappings import CS3_PORTFOLIO
-
+    """Aggregates all portfolio companies via PortfolioDataService."""
     fund_id = args.get("fund_id", "PE-FUND-I")
-    companies = []
+    svc = await asyncio.to_thread(_portfolio)
+    portfolio = await asyncio.to_thread(svc.get_portfolio_view, fund_id)
 
-    from app.repositories.composite_scoring_repository import CompositeScoringRepository
-    repo = CompositeScoringRepository()
-    for ticker in CS3_PORTFOLIO:
-        row = await asyncio.to_thread(repo._query, ticker, ["ticker", "org_air"])
-        if row:
-            row_lower = {k.lower(): v for k, v in row.items()}
-            org_air = float(row_lower.get("org_air") or 0.0)
-        else:
-            org_air = 0.0
-        companies.append({
-            "ticker": ticker,
-            "org_air": org_air,
-            "sector": COMPANY_SECTORS.get(ticker, ""),
-        })
-
+    # Flatten to match MCP tool schema
+    companies = [
+        {"ticker": c["ticker"], "org_air": c["org_air"], "sector": c["sector"]}
+        for c in portfolio.get("companies", [])
+    ]
     scores = [c["org_air"] for c in companies if c["org_air"] > 0]
-    avg = lambda lst: round(sum(lst) / len(lst), 1) if lst else 0.0
 
     return {
         "fund_id": fund_id,
-        "fund_air": avg(scores),
+        "fund_air": round(sum(scores) / len(scores), 1) if scores else 0.0,
         "company_count": len(companies),
         "companies": companies,
     }

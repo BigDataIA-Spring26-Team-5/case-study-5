@@ -5,7 +5,7 @@ It delegates to CS1-CS4 clients (in-process, not HTTP) and value-creation module
 """
 from __future__ import annotations
 
-import logging
+import structlog
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any
 
@@ -13,6 +13,7 @@ from app.services.integration.cs1_client import CS1Client, Company, Sector
 from app.services.integration.cs2_client import CS2Client, CS2Evidence
 from app.services.integration.cs3_client import (
     CS3Client, CompanyAssessment, DimensionScore, DIMENSIONS, score_to_level,
+    _DIM_ALIAS_MAP,
 )
 from app.services.integration.cs4_client import CS4Client, JustificationResult
 from app.services.value_creation.ebitda import EBITDACalculator, EBITDAProjection
@@ -23,21 +24,26 @@ from app.services.composite_scoring_service import (
 )
 from app.config.company_mappings import CS3_PORTFOLIO
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
-class CompanyView:
+class PortfolioCompanyView:
     """Enriched company view combining CS1-CS3 data."""
-    ticker: str
-    name: str
-    sector: str
-    org_air_score: float = 0.0
+    company_id: str = ""
+    ticker: str = ""
+    name: str = ""
+    sector: str = ""
+    org_air: float = 0.0
     vr_score: float = 0.0
     hr_score: float = 0.0
-    synergy: float = 0.0
-    position_factor: float = 0.0
+    synergy_score: float = 0.0
     dimension_scores: Dict[str, float] = field(default_factory=dict)
+    confidence_interval: tuple = (0.0, 0.0)
+    entry_org_air: float = 0.0
+    delta_since_entry: float = 0.0
+    evidence_count: int = 0
+    position_factor: float = 0.0
     market_cap_percentile: float = 0.0
     revenue_millions: float = 0.0
     employee_count: int = 0
@@ -46,11 +52,15 @@ class CompanyView:
         return asdict(self)
 
 
+# Backward compatibility alias
+CompanyView = PortfolioCompanyView
+
+
 @dataclass
 class PortfolioView:
     """Portfolio-level aggregated view."""
     fund_id: str
-    companies: List[CompanyView] = field(default_factory=list)
+    companies: List[PortfolioCompanyView] = field(default_factory=list)
     fund_air_score: float = 0.0
     total_companies: int = 0
     ai_leaders: int = 0
@@ -204,7 +214,7 @@ class PortfolioDataService:
 
         if assessment:
             dim_scores = {
-                dim: ds.score
+                _DIM_ALIAS_MAP.get(dim, dim): ds.score
                 for dim, ds in assessment.dimension_scores.items()
             }
             current_org_air = assessment.org_air_score
@@ -224,9 +234,17 @@ class PortfolioDataService:
     # Portfolio-level queries
     # ------------------------------------------------------------------
 
+    async def _get_entry_score(self, company_id: str) -> float:
+        """Query entry Org-AI-R score for a company.
+
+        Stub — in production this would query the PORTFOLIO_POSITIONS table.
+        Falls back to current score (delta_since_entry = 0).
+        """
+        return 0.0
+
     def get_portfolio_view(self, fund_id: str = "PE-FUND-I") -> Dict[str, Any]:
         """Get aggregated portfolio view with all company scores."""
-        companies: List[CompanyView] = []
+        companies: List[PortfolioCompanyView] = []
 
         for ticker in CS3_PORTFOLIO:
             assessment = self.cs3.get_assessment(ticker)
@@ -236,6 +254,7 @@ class PortfolioDataService:
             hr = 0.0
             synergy = 0.0
             pf = 0.0
+            ci = (0.0, 0.0)
 
             if assessment:
                 org_air = assessment.org_air_score
@@ -248,21 +267,32 @@ class PortfolioDataService:
                     for dim, ds in assessment.dimension_scores.items()
                 }
 
-            companies.append(CompanyView(
+            # Evidence count from CS2
+            evidence_count = 0
+            try:
+                evidence = self.cs2.get_evidence(ticker=ticker)
+                evidence_count = len(evidence)
+            except Exception:
+                pass
+
+            companies.append(PortfolioCompanyView(
+                company_id=ticker,
                 ticker=ticker,
                 name=COMPANY_NAMES.get(ticker, ticker),
                 sector=COMPANY_SECTORS.get(ticker, ""),
-                org_air_score=org_air,
+                org_air=org_air,
                 vr_score=vr,
                 hr_score=hr,
-                synergy=synergy,
+                synergy_score=synergy,
                 position_factor=pf,
                 dimension_scores=dim_scores,
+                confidence_interval=ci,
+                evidence_count=evidence_count,
                 market_cap_percentile=MARKET_CAP_PERCENTILES.get(ticker, 0.0),
             ))
 
         # Portfolio aggregates
-        scores = [c.org_air_score for c in companies if c.org_air_score > 0]
+        scores = [c.org_air for c in companies if c.org_air > 0]
         avg_score = sum(scores) / len(scores) if scores else 0.0
         vr_scores = [c.vr_score for c in companies if c.vr_score > 0]
         hr_scores = [c.hr_score for c in companies if c.hr_score > 0]
@@ -272,9 +302,13 @@ class PortfolioDataService:
             companies=companies,
             fund_air_score=round(avg_score, 2),
             total_companies=len(companies),
-            ai_leaders=sum(1 for c in companies if c.org_air_score >= 70),
-            ai_laggards=sum(1 for c in companies if 0 < c.org_air_score < 50),
+            ai_leaders=sum(1 for c in companies if c.org_air >= 70),
+            ai_laggards=sum(1 for c in companies if 0 < c.org_air < 50),
             avg_vr=round(sum(vr_scores) / len(vr_scores), 2) if vr_scores else 0.0,
             avg_hr=round(sum(hr_scores) / len(hr_scores), 2) if hr_scores else 0.0,
         )
         return portfolio.to_dict()
+
+
+# Module-level singleton — set by lifespan.py at startup
+portfolio_data_service: Optional[PortfolioDataService] = None
