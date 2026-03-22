@@ -253,21 +253,54 @@ with st.sidebar:
 
 @st.cache_data(ttl=300)
 def _load_portfolio(fund_id: str = "PE-FUND-I", tickers: tuple = ()) -> list[dict]:
-    """Load scores for the selected portfolio companies.
+    """Load scores for the selected portfolio companies via PortfolioDataService.
 
     Args:
         fund_id:  Fund identifier (used by portfolio_data_service).
         tickers:  Tuple of selected ticker symbols (hashable for cache key).
                   If empty, uses all 5 default companies.
 
-    Falls back to per-ticker FastAPI calls if portfolio_data_service is unavailable.
+    Tries PortfolioDataService first, falls back to per-ticker FastAPI calls.
     """
-    # Build a lookup from the available companies for name/sector
-    available = {c["ticker"]: c for c in fetch_available_companies()}
+    # Try PortfolioDataService (in-process, calls CS1-CS4 directly)
+    try:
+        from app.services.portfolio_data_service import PortfolioDataService
+        from app.services.integration.cs1_client import CS1Client
+        from app.services.integration.cs2_client import CS2Client
+        from app.services.integration.cs3_client import CS3Client
+        from app.services.composite_scoring_service import CompositeScoringService
 
+        svc = PortfolioDataService(
+            cs1_client=CS1Client(),
+            cs2_client=CS2Client(),
+            cs3_client=CS3Client(),
+            cs4_client=None,  # CS4 not needed for portfolio view
+            composite_scoring_service=CompositeScoringService(),
+        )
+        portfolio = svc.get_portfolio_view(fund_id)
+        rows = []
+        for c in portfolio.get("companies", []):
+            rows.append({
+                "ticker":         c["ticker"],
+                "name":           c.get("name", c["ticker"]),
+                "sector":         c.get("sector", ""),
+                "org_air":        round(float(c.get("org_air", 0.0)), 2),
+                "vr_score":       round(float(c.get("vr_score", 0.0)), 2),
+                "hr_score":       round(float(c.get("hr_score", 0.0)), 2),
+                "delta":          round(float(c.get("delta_since_entry", 0.0)), 2),
+                "evidence_count": int(c.get("evidence_count", 0)),
+                "synergy":        round(float(c.get("synergy_score", 0.0)), 2),
+                "tc":             0.0,
+                "pf":             round(float(c.get("position_factor", 0.0)), 2),
+            })
+        return rows
+    except Exception:
+        pass  # Fall back to HTTP
+
+    # Fallback: per-ticker FastAPI calls
+    available = {c["ticker"]: c for c in fetch_available_companies()}
     selected = list(tickers) if tickers else [c["ticker"] for c in _DEFAULT_PORTFOLIO]
 
-    # Per-ticker FastAPI calls — works for any ticker in Snowflake
     rows = []
     for ticker in selected:
         co = available.get(ticker, {"ticker": ticker, "name": ticker, "sector": "Unknown"})
@@ -317,6 +350,7 @@ def page_portfolio() -> None:
     with st.spinner("Loading scores..."):
         rows = _load_portfolio(fund_id, selected_tickers)
     df = pd.DataFrame(rows)
+    st.sidebar.success(f"Loaded {len(df)} companies from CS1-CS4")
 
     scored    = df[df["org_air"] > 0]
     fund_air  = round(scored["org_air"].mean(), 1) if not scored.empty else 0.0
@@ -371,13 +405,7 @@ def page_portfolio() -> None:
         "vr_score":"V^R","hr_score":"H^R","synergy":"Synergy","tc":"TC","pf":"PF",
     }).sort_values("Org-AI-R", ascending=False)
 
-    def _color(v: float) -> str:
-        if v >= 80:   return "background-color:#dcfce7;color:#15803d;font-weight:700;"
-        elif v >= 60: return "background-color:#fef9c3;color:#854d0e;"
-        elif v > 0:   return "background-color:#fee2e2;color:#991b1b;"
-        return ""
-
-    st.dataframe(disp.style.map(_color, subset=["Org-AI-R"]),
+    st.dataframe(disp.style.background_gradient(subset=["Org-AI-R"], cmap="RdYlGn"),
                  use_container_width=True, hide_index=True)
     st.caption("Use **Evidence Analysis** in the sidebar to deep-dive into a company.")
 
