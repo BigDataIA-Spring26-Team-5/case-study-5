@@ -76,20 +76,52 @@ except ImportError:
     pass
 
 # evidence_display lives in components/ which is on sys.path — import directly
-from evidence_display import render_company_evidence_panel  # noqa: E402
+from evidence_display import (  # noqa: E402
+    render_company_evidence_panel,
+    fetch_all_justifications,
+)
 
 # ============================================================================
 # Constants
 # ============================================================================
 BASE_URL = "http://localhost:8000"
 
-CS3_PORTFOLIO = [
+# Default portfolio — shown before user loads Snowflake companies
+_DEFAULT_PORTFOLIO = [
     {"ticker": "NVDA", "name": "NVIDIA Corporation",          "sector": "Technology"},
     {"ticker": "JPM",  "name": "JPMorgan Chase & Co.",        "sector": "Financial Services"},
     {"ticker": "WMT",  "name": "Walmart Inc.",                "sector": "Retail"},
     {"ticker": "GE",   "name": "GE Aerospace",                "sector": "Manufacturing"},
     {"ticker": "DG",   "name": "Dollar General Corporation",  "sector": "Retail"},
 ]
+
+
+@st.cache_data(ttl=120)
+def fetch_available_companies() -> list[dict]:
+    """Fetch all companies from Snowflake via GET /api/v1/companies.
+
+    Returns list of dicts with ticker, name, sector.
+    Falls back to _DEFAULT_PORTFOLIO if API is unreachable.
+    """
+    try:
+        r = requests.get(f"{BASE_URL}/api/v1/companies", params={"page_size": 100}, timeout=10)
+        if r.status_code == 200:
+            items = r.json().get("items", [])
+            companies = []
+            for item in items:
+                ticker = item.get("ticker")
+                if ticker:  # only include companies with a ticker
+                    companies.append({
+                        "ticker":  ticker.upper(),
+                        "name":    item.get("name", ticker),
+                        "sector":  item.get("sector") or "Unknown",
+                    })
+            # Sort alphabetically by ticker
+            companies.sort(key=lambda c: c["ticker"])
+            return companies if companies else _DEFAULT_PORTFOLIO
+    except Exception:
+        pass
+    return _DEFAULT_PORTFOLIO
 
 # ============================================================================
 # Page config — must be the FIRST st.* call
@@ -104,79 +136,200 @@ st.set_page_config(
 # ============================================================================
 # Session state defaults
 # ============================================================================
-for _k, _v in {"selected_ticker": "NVDA", "workflow_ticker": "NVDA",
-               "workflow_result": None}.items():
+_ss_defaults = {
+    "selected_ticker":  "NVDA",
+    "workflow_ticker":  "NVDA",
+    "workflow_result":  None,
+    "portfolio":        _DEFAULT_PORTFOLIO,   # overwritten by sidebar selector
+}
+for _k, _v in _ss_defaults.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+
+# ============================================================================
+# Sidebar — Portfolio Selector (loads companies from Snowflake)
+# ============================================================================
+with st.sidebar:
+    st.markdown("### Portfolio Configuration")
+
+    all_companies = fetch_available_companies()
+    all_tickers   = [c["ticker"] for c in all_companies]
+
+    # Default selection: keep current portfolio or fall back to first 5
+    default_tickers = [
+        c["ticker"] for c in st.session_state["portfolio"]
+        if c["ticker"] in all_tickers
+    ] or all_tickers[:5]
+
+    selected_tickers = st.multiselect(
+        "Select portfolio companies",
+        options=all_tickers,
+        default=default_tickers,
+        format_func=lambda t: f"{t} — {next((c['name'] for c in all_companies if c['ticker'] == t), t)}",
+        help="Choose companies from your Snowflake companies table",
+        key="portfolio_multiselect",
+    )
+
+    if selected_tickers:
+        ticker_to_co = {c["ticker"]: c for c in all_companies}
+        st.session_state["portfolio"] = [
+            ticker_to_co[t] for t in selected_tickers if t in ticker_to_co
+        ]
+        # Reset selected/workflow tickers if they're no longer in the portfolio
+        if st.session_state["selected_ticker"] not in selected_tickers:
+            st.session_state["selected_ticker"] = selected_tickers[0]
+        if st.session_state["workflow_ticker"] not in selected_tickers:
+            st.session_state["workflow_ticker"] = selected_tickers[0]
+    else:
+        st.warning("Select at least one company.")
+
+    st.markdown("---")
+
+    # ── Quick Due Diligence Runner ────────────────────────────────────────────
+    st.markdown("### Run Due Diligence")
+    dd_ticker = st.text_input(
+        "Ticker", value="NVDA", key="dd_ticker_input",
+        placeholder="e.g. NVDA, JPM, WMT",
+    ).upper().strip()
+    dd_type = st.selectbox(
+        "Assessment type",
+        ["screening", "limited", "full"],
+        index=0,
+        key="dd_type_input",
+        help="screening=fastest, full=all 4 agents",
+    )
+    if st.button("▶ Run DD Workflow", key="sidebar_run_dd", type="primary",
+                 use_container_width=True):
+        if dd_ticker:
+            st.session_state["sidebar_dd_running"] = True
+            st.session_state["sidebar_dd_ticker"] = dd_ticker
+            st.session_state["sidebar_dd_type"]   = dd_type
+            st.session_state["sidebar_dd_result"] = None
+            st.session_state["sidebar_dd_error"]  = None
+
+    if st.session_state.get("sidebar_dd_running"):
+        t = st.session_state["sidebar_dd_ticker"]
+        tp = st.session_state["sidebar_dd_type"]
+        with st.spinner(f"Running {tp} DD for {t}... (may take ~30s)"):
+            try:
+                resp = requests.post(
+                    f"{BASE_URL}/api/v1/dd/run/{t}",
+                    json={"assessment_type": tp, "requested_by": "streamlit"},
+                    timeout=300,
+                )
+                if resp.status_code == 200:
+                    st.session_state["sidebar_dd_result"] = resp.json()
+                else:
+                    st.session_state["sidebar_dd_error"] = (
+                        f"API {resp.status_code}: {resp.text[:200]}"
+                    )
+            except Exception as e:
+                st.session_state["sidebar_dd_error"] = str(e)
+        st.session_state["sidebar_dd_running"] = False
+
+    if st.session_state.get("sidebar_dd_result"):
+        r = st.session_state["sidebar_dd_result"]
+        st.success(f"✓ DD complete — {r['ticker']}")
+        st.markdown(f"**Org-AI-R:** `{r.get('org_air', 'N/A')}`")
+        st.markdown(f"**V^R:** `{r.get('vr_score', 'N/A')}`  |  **H^R:** `{r.get('hr_score', 'N/A')}`")
+        if r.get("requires_approval"):
+            st.warning(f"⚠ HITL — {r.get('approval_status')} by {r.get('approved_by')}")
+        else:
+            st.info("HITL: not triggered")
+        if r.get("narrative"):
+            with st.expander("IC Narrative"):
+                st.write(r["narrative"])
+        st.caption(f"thread: `{r.get('thread_id', '')}`")
+
+    if st.session_state.get("sidebar_dd_error"):
+        st.error(st.session_state["sidebar_dd_error"])
+
+    st.markdown("---")
 
 # ============================================================================
 # Data helpers
 # ============================================================================
 
 @st.cache_data(ttl=300)
-def _load_scores() -> list[dict]:
+def _load_portfolio(fund_id: str = "PE-FUND-I", tickers: tuple = ()) -> list[dict]:
+    """Load scores for the selected portfolio companies.
+
+    Args:
+        fund_id:  Fund identifier (used by portfolio_data_service).
+        tickers:  Tuple of selected ticker symbols (hashable for cache key).
+                  If empty, uses all 5 default companies.
+
+    Falls back to per-ticker FastAPI calls if portfolio_data_service is unavailable.
+    """
+    # Build a lookup from the available companies for name/sector
+    available = {c["ticker"]: c for c in fetch_available_companies()}
+
+    selected = list(tickers) if tickers else [c["ticker"] for c in _DEFAULT_PORTFOLIO]
+
+    # Per-ticker FastAPI calls — works for any ticker in Snowflake
     rows = []
-    for co in CS3_PORTFOLIO:
-        ticker = co["ticker"]
+    for ticker in selected:
+        co = available.get(ticker, {"ticker": ticker, "name": ticker, "sector": "Unknown"})
         try:
             r = requests.get(f"{BASE_URL}/api/v1/assessments/{ticker}", timeout=15)
             if r.status_code == 200:
                 d = r.json()
                 rows.append({
-                    "ticker":   ticker,
-                    "name":     co["name"],
-                    "sector":   co["sector"],
-                    "org_air":  round(float(d.get("org_air_score", 0.0)), 2),
-                    "vr_score": round(float(d.get("vr_score", 0.0)), 2),
-                    "hr_score": round(float(d.get("hr_score", 0.0)), 2),
-                    "synergy":  round(float(d.get("synergy_score", 0.0)), 2),
-                    "tc":       round(float(d.get("talent_concentration", 0.0)), 2),
-                    "pf":       round(float(d.get("position_factor", 0.0)), 2),
+                    "ticker":         ticker,
+                    "name":           co["name"],
+                    "sector":         co["sector"],
+                    "org_air":        round(float(d.get("org_air_score", 0.0)), 2),
+                    "vr_score":       round(float(d.get("vr_score", 0.0)), 2),
+                    "hr_score":       round(float(d.get("hr_score", 0.0)), 2),
+                    "delta":          0.0,
+                    "evidence_count": 0,
+                    "synergy":        round(float(d.get("synergy_score", 0.0)), 2),
+                    "tc":             round(float(d.get("talent_concentration", 0.0)), 2),
+                    "pf":             round(float(d.get("position_factor", 0.0)), 2),
                 })
             else:
                 rows.append({**co, "org_air": 0.0, "vr_score": 0.0, "hr_score": 0.0,
+                             "delta": 0.0, "evidence_count": 0,
                              "synergy": 0.0, "tc": 0.0, "pf": 0.0})
         except Exception:
             rows.append({**co, "org_air": 0.0, "vr_score": 0.0, "hr_score": 0.0,
+                         "delta": 0.0, "evidence_count": 0,
                          "synergy": 0.0, "tc": 0.0, "pf": 0.0})
     return rows
+
+
+_load_scores = _load_portfolio  # backward-compat alias
 
 
 # ============================================================================
 # Page: Portfolio Overview
 # ============================================================================
 def page_portfolio() -> None:
+    portfolio = st.session_state.get("portfolio", _DEFAULT_PORTFOLIO)
     st.title("Portfolio Overview — Org-AI-R Intelligence")
-    st.caption("Composite AI Readiness scores for the 5 CS3 portfolio companies.")
+    st.caption(f"Showing {len(portfolio)} selected companies.")
 
+    # Sidebar: fund_id input
+    fund_id = st.sidebar.text_input("Fund ID", value="PE-FUND-I", key="fund_id_input")
+
+    selected_tickers = tuple(c["ticker"] for c in portfolio)
     with st.spinner("Loading scores..."):
-        rows = _load_scores()
+        rows = _load_portfolio(fund_id, selected_tickers)
     df = pd.DataFrame(rows)
 
-    scored   = df[df["org_air"] > 0]
-    fund_air = round(scored["org_air"].mean(), 1) if not scored.empty else 0.0
-    leaders  = int((df["org_air"] >= 70).sum())
-    laggards = int((df["org_air"] < 50).sum())
-    avg_vr   = round(scored["vr_score"].mean(), 1) if not scored.empty else 0.0
-    avg_hr   = round(scored["hr_score"].mean(), 1) if not scored.empty else 0.0
+    scored    = df[df["org_air"] > 0]
+    fund_air  = round(scored["org_air"].mean(), 1) if not scored.empty else 0.0
+    avg_vr    = round(scored["vr_score"].mean(), 1) if not scored.empty else 0.0
+    avg_delta = round(scored["delta"].mean(), 1) if not scored.empty and "delta" in scored.columns else 0.0
 
+    # CS5 spec: Fund-AI-R | Companies | Avg V^R | Avg Delta
     st.markdown("### Fund-Level Metrics")
-
-    def _card(col, label, value, sub=""):
-        col.markdown(
-            f'<div class="cs5-metric-card">'
-            f'<div class="cs5-metric-label">{label}</div>'
-            f'<div class="cs5-metric-value">{value}</div>'
-            f'<div class="cs5-metric-sub">{sub}</div>'
-            f'</div>', unsafe_allow_html=True)
-
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    _card(c1, "Fund-AI-R", f"{fund_air:.1f}", "portfolio avg")
-    _card(c2, "Companies", str(len(df)),       "in portfolio")
-    _card(c3, "Leaders",   str(leaders),        "score ≥ 70")
-    _card(c4, "Laggards",  str(laggards),       "score < 50")
-    _card(c5, "Avg V^R",   f"{avg_vr:.1f}",    "vertical AI")
-    _card(c6, "Avg H^R",   f"{avg_hr:.1f}",    "human readiness")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Fund-AI-R",  f"{fund_air:.1f}", help="EV-weighted portfolio Org-AI-R average")
+    c2.metric("Companies",  str(len(df)),       help="Portfolio company count")
+    c3.metric("Avg V^R",    f"{avg_vr:.1f}",   help="Average Valuation Readiness score")
+    c4.metric("Avg Delta",  f"{avg_delta:+.1f}", help="Average score change since entry")
 
     st.markdown("---")
     st.markdown("### V^R vs H^R Quadrant Analysis")
@@ -234,17 +387,23 @@ def page_portfolio() -> None:
 # ============================================================================
 def page_evidence() -> None:
     st.title("Evidence Analysis")
-    tickers = [co["ticker"] for co in CS3_PORTFOLIO]
-    sel = st.session_state.get("selected_ticker", "NVDA")
+    portfolio = st.session_state.get("portfolio", _DEFAULT_PORTFOLIO)
+    tickers = [co["ticker"] for co in portfolio]
+    sel = st.session_state.get("selected_ticker", tickers[0] if tickers else "NVDA")
     idx = tickers.index(sel) if sel in tickers else 0
 
     selected = st.sidebar.selectbox(
         "Company", tickers, index=idx,
-        format_func=lambda t: f"{t} — {next(c['name'] for c in CS3_PORTFOLIO if c['ticker']==t)}",
+        format_func=lambda t: f"{t} — {next((c['name'] for c in portfolio if c['ticker']==t), t)}",
         key="evidence_ticker_select",
     )
     st.session_state["selected_ticker"] = selected
-    render_company_evidence_panel(selected)
+
+    # CS5 spec: fetch justifications first, then pass to panel
+    # Uses session_state cache to avoid re-fetching on every rerun
+    cache_key = f"justifications_{selected}"
+    justifications = st.session_state.get(cache_key)  # None on first load → shows generate UI
+    render_company_evidence_panel(selected, justifications)
 
 
 # ============================================================================
@@ -257,14 +416,16 @@ def page_workflow() -> None:
         "Triggers HITL approval automatically when thresholds are exceeded."
     )
 
-    tickers = [co["ticker"] for co in CS3_PORTFOLIO]
+    portfolio = st.session_state.get("portfolio", _DEFAULT_PORTFOLIO)
+    tickers = [co["ticker"] for co in portfolio]
+    default_wf = st.session_state.get("workflow_ticker", tickers[0] if tickers else "NVDA")
     col_sel, col_type, col_run = st.columns([2, 2, 1])
 
     with col_sel:
         ticker = st.selectbox(
             "Company", tickers,
-            format_func=lambda t: f"{t} — {next(c['name'] for c in CS3_PORTFOLIO if c['ticker']==t)}",
-            index=tickers.index(st.session_state.get("workflow_ticker", "NVDA")),
+            format_func=lambda t: f"{t} — {next((c['name'] for c in portfolio if c['ticker']==t), t)}",
+            index=tickers.index(default_wf) if default_wf in tickers else 0,
             key="workflow_ticker_select",
         )
         st.session_state["workflow_ticker"] = ticker
@@ -462,7 +623,7 @@ with st.sidebar:
     st.markdown('<span style="font-size:10px;opacity:0.5;text-transform:uppercase;'
                 'letter-spacing:0.06em;">Portfolio Companies</span>',
                 unsafe_allow_html=True)
-    for co in CS3_PORTFOLIO:
+    for co in st.session_state.get("portfolio", _DEFAULT_PORTFOLIO):
         st.caption(f"{co['ticker']} — {co['name']}")
     st.divider()
     if st.button("Refresh Data", key="btn_refresh", use_container_width=True, type="secondary"):
