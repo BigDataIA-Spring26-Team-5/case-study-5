@@ -175,11 +175,10 @@ def _create_singletons(app: FastAPI) -> None:
         composite_scoring_service=app.state.composite_scoring_service,
     )
     app.state.history_service = AssessmentHistoryService(
+        cs1_client=app.state.cs1_client,
         cs3_client=app.state.cs3_client,
     )
-    app.state.fund_air_calculator = FundAIRCalculator(
-        cs3_client=app.state.cs3_client,
-    )
+    app.state.fund_air_calculator = FundAIRCalculator()
 
 
 
