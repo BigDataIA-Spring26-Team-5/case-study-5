@@ -114,7 +114,7 @@ async def value_creator_node(state: DueDiligenceState) -> Dict[str, Any]:
 # HITL approval node
 # ---------------------------------------------------------------------------
 
-async def hitl_approval_node(state: DueDiligenceState) -> Dict[str, Any]:
+def hitl_approval_node(state: DueDiligenceState) -> Dict[str, Any]:
     """Human-in-the-loop gate.
 
     Production: send Slack/email notification and block until human responds.
