@@ -251,6 +251,31 @@ class MCPToolCaller:
             "companies": companies,
         }
 
+    def call_tool(self, tool_name: str, arguments: dict) -> Dict[str, Any]:
+        """Unified tool dispatch — mirrors app/mcp/server.py routing."""
+        dispatch = {
+            "calculate_org_air_score": lambda a: self.calculate_org_air_score(a["company_id"]),
+            "get_company_evidence": lambda a: self.get_company_evidence(
+                a["company_id"], a.get("dimension"), a.get("limit", 5),
+            ),
+            "generate_justification": lambda a: self.generate_justification(
+                a["company_id"], a["dimension"],
+            ),
+            "project_ebitda_impact": lambda a: self.project_ebitda_impact(
+                a["company_id"], a["entry_score"], a["target_score"], a["h_r_score"],
+            ),
+            "run_gap_analysis": lambda a: self.run_gap_analysis(
+                a["company_id"], a.get("target_org_air", 85.0),
+            ),
+            "get_portfolio_summary": lambda a: self.get_portfolio_summary(
+                a.get("fund_id", "PE-FUND-I"),
+            ),
+        }
+        handler = dispatch.get(tool_name)
+        if handler is None:
+            raise ValueError(f"Unknown tool: {tool_name}")
+        return handler(arguments)
+
     def close(self) -> None:
         self._http.close()
 
