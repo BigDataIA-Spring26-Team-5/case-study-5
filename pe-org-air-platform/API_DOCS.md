@@ -1,6 +1,6 @@
 # PE Org-AI-R Platform — API Documentation
 
-**Version:** 1.0.0
+**Version:** 2.0.0
 **Base URL:** `http://localhost:8000`
 **Swagger UI:** `/docs` · **ReDoc:** `/redoc`
 
@@ -24,6 +24,11 @@
 14. [CS3 H^R (Human Readiness)](#cs3-hr-human-readiness)
 15. [CS3 Org-AI-R](#cs3-org-ai-r)
 16. [Analyst Notes (CS4)](#analyst-notes-cs4)
+17. [Configuration (CS5)](#configuration-cs5)
+18. [Agentic Due Diligence (CS5)](#agentic-due-diligence-cs5)
+19. [MCP Server (CS5)](#mcp-server-cs5)
+20. [Observability — Prometheus Metrics (CS5)](#observability--prometheus-metrics-cs5)
+21. [Agent Architecture Reference (CS5)](#agent-architecture-reference-cs5)
 
 ---
 
@@ -1099,4 +1104,549 @@
 
 ---
 
-*Generated 2026-03-18*
+## Configuration (CS5)
+
+> **Prefix:** `/api/v1/config`
+> **Tag:** Configuration
+
+### `GET /api/v1/config/scoring-parameters`
+
+**Summary:** Get the v2.0 scoring formula coefficients.
+
+**Parameters:** None
+
+**Response `200`:**
+```json
+{
+  "version": "v2.0",
+  "alpha": 0.6,
+  "beta": 0.12,
+  "lambda_penalty": 0.05,
+  "delta_position": 0.15
+}
+```
+
+**Core logic:**
+1. Reads coefficients from the `Settings` singleton (`get_settings()`).
+
+---
+
+### `GET /api/v1/config/dimension-weights`
+
+**Summary:** Get the 7 V^R dimension weights and their validity.
+
+**Parameters:** None
+
+**Response `200`:**
+```json
+{
+  "weights": {
+    "data_infrastructure": 0.15,
+    "ai_governance": 0.15,
+    "technology_stack": 0.15,
+    "talent_skills": 0.20,
+    "leadership_vision": 0.10,
+    "use_case_portfolio": 0.15,
+    "culture_change": 0.10
+  },
+  "total": 1.0,
+  "is_valid": true
+}
+```
+
+**Core logic:**
+1. Computes weights from `Settings`, sums them, and sets `is_valid = abs(total − 1.0) ≤ 0.001`.
+
+---
+
+### `GET /api/v1/config/sector-baselines`
+
+**Summary:** Get H^R baseline scores per sector.
+
+**Parameters:** None
+
+**Response `200`:**
+```json
+{
+  "baselines": {
+    "technology": 85,
+    "financial_services": 72,
+    "healthcare": 75,
+    "manufacturing": 52,
+    "retail": 57,
+    "energy": 48,
+    "business_services": 65,
+    "consumer": 60
+  }
+}
+```
+
+**Core logic:**
+1. Returns sector-specific H^R baseline values from `Settings`.
+
+---
+
+### `GET /api/v1/config/portfolio`
+
+**Summary:** Get CS3 portfolio tickers and RAG retrieval settings.
+
+**Parameters:** None
+
+**Response `200`:**
+```json
+{
+  "cs3_portfolio_tickers": ["NVDA", "JPM", "WMT", "GE", "DG"],
+  "retrieval": {
+    "max_context_chars": 4000,
+    "default_top_k": 10,
+    "dense_weight": 0.7,
+    "sparse_weight": 0.3,
+    "rrf_k": 60
+  }
+}
+```
+
+**Core logic:**
+1. Returns `CS3_PORTFOLIO` from `app.config.company_mappings` and retrieval tunables from `RETRIEVAL_SETTINGS`.
+
+---
+
+## Agentic Due Diligence (CS5)
+
+> **Prefix:** `/api/v1/dd`
+> **Tag:** CS5 — Due Diligence
+
+This router exposes the LangGraph multi-agent due diligence workflow as REST endpoints. The workflow orchestrates 4 specialist agents (SEC analyst, scorer, evidence, value creation) with a supervisor and HITL approval gates.
+
+**Agent pipeline:**
+```
+supervisor → sec_analyst → supervisor → scorer → supervisor
+  → evidence_agent → supervisor → value_creator
+  → [hitl_approval →] supervisor → complete → END
+```
+
+### `POST /api/v1/dd/run/{ticker}`
+
+**Summary:** Execute the full multi-agent due diligence workflow for a company.
+
+**Path parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `ticker` | `string` | Company ticker (auto-uppercased) |
+
+**Request body:** `DDRequest`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `assessment_type` | `string` | `"full"` | `"screening"` (score only), `"limited"` (+ justifications), `"full"` (all agents incl. EBITDA) |
+| `requested_by` | `string` | `"analyst"` | Identity of the requesting analyst |
+| `target_org_air` | `float` | `85.0` | Target Org-AI-R for gap analysis |
+
+**Response `200`:** `DDSummary`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ticker` | `string` | Company ticker |
+| `thread_id` | `string` | LangGraph checkpoint ID (format: `dd-{ticker}-{timestamp}`) |
+| `assessment_type` | `string` | Echoed from request |
+| `org_air` | `float \| null` | Final Org-AI-R score |
+| `vr_score` | `float \| null` | V^R score |
+| `hr_score` | `float \| null` | H^R score |
+| `dimension_scores` | `Dict[str, float]` | Per-dimension scores |
+| `requires_approval` | `bool` | Whether HITL gate was triggered |
+| `approval_status` | `string \| null` | `"pending"`, `"approved"`, or `"rejected"` |
+| `approved_by` | `string \| null` | Approver identity |
+| `approval_reason` | `string \| null` | Human-readable HITL reason |
+| `ebitda_base` | `string \| null` | Base-case EBITDA projection (e.g. `"3.45%"`) |
+| `ebitda_risk_adjusted` | `string \| null` | Risk-adjusted EBITDA (e.g. `"2.80%"`) |
+| `narrative` | `string \| null` | Value-creation narrative |
+| `messages_count` | `int` | Total agent messages produced |
+| `started_at` | `string \| null` | UTC start timestamp |
+| `completed_at` | `string \| null` | UTC completion timestamp |
+| `error` | `string \| null` | Error message if workflow failed |
+
+**Error codes:** `503 LANGGRAPH_UNAVAILABLE` · `500 WORKFLOW_ERROR`
+
+**Core logic:**
+1. Uppercases ticker and generates `thread_id = "dd-{ticker}-{timestamp}"`.
+2. Lazily imports `dd_graph` from `app.agents.supervisor` (503 if LangGraph not installed).
+3. Initialises `DueDiligenceState` with all fields (messages=[], all outputs=None, requires_approval=False).
+4. Invokes `await dd_graph.ainvoke(initial_state, config)` — runs the full agent pipeline.
+5. Extracts key fields from the final state into `DDSummary` and returns.
+
+---
+
+### `GET /api/v1/dd/status/{thread_id}`
+
+**Summary:** Retrieve the checkpointed state of a prior due diligence run.
+
+**Path parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `thread_id` | `string` | Thread ID returned by `POST /run/{ticker}` |
+
+**Response `200`:** `DDSummary` (same schema as above)
+
+**Error codes:** `503 LANGGRAPH_UNAVAILABLE` · `404 RUN_NOT_FOUND` · `500 STATUS_FETCH_ERROR`
+
+**Core logic:**
+1. Lazily imports `dd_graph` (503 if unavailable).
+2. Calls `dd_graph.aget_state(config)` with the given `thread_id`.
+3. If state is None → 404; otherwise extracts `DDSummary` from checkpointed values.
+
+---
+
+## MCP Server (CS5)
+
+> **Transport:** stdio (JSON-RPC 2.0)
+> **Server name:** `pe-org-air` v1.0.0
+> **Launch:** `python -m app.mcp.server`
+> **Prerequisite:** FastAPI must be running on `localhost:8000` for most tools (except `project_ebitda_impact`)
+
+The MCP server wraps CS1–CS4 capabilities as tools that any LLM agent (Claude Desktop, Cursor, GPT-4, etc.) can invoke. It exposes 6 tools, 2 resources, and 2 prompts.
+
+### 19.1 Tools
+
+#### `calculate_org_air_score`
+
+**Description:** Compute the full Org-AI-R composite score for a portfolio company via the CS3 scoring pipeline.
+
+**Input schema:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `company_id` | `string` | Yes | Ticker symbol (e.g. `"NVDA"`) |
+
+**Output fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `company_id` | `string` | Ticker |
+| `org_air` | `float` | Org-AI-R composite score (0–100) |
+| `vr_score` | `float` | V^R score |
+| `hr_score` | `float` | H^R score |
+| `synergy_score` | `float` | Synergy component |
+| `confidence_interval` | `[float, float]` | Score confidence bounds |
+| `dimension_scores` | `Dict[str, float]` | 7 dimension scores |
+
+**Dependencies:** CS3Client → Snowflake `SCORING` table. Requires `POST /api/v1/scoring/orgair/portfolio` to have been run first.
+
+---
+
+#### `get_company_evidence`
+
+**Description:** Retrieve raw evidence items for a portfolio company from CS2. Supports filtering by V^R dimension.
+
+**Input schema:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `company_id` | `string` | Yes | — | Ticker symbol |
+| `dimension` | `string` | No | — | One of: `data_infrastructure`, `ai_governance`, `technology_stack`, `talent`, `leadership`, `use_case_portfolio`, `culture` |
+| `limit` | `integer` | No | `50` | Max items (1–200) |
+
+**Output fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `evidence` | `List[Dict]` | Evidence items (source_type, content, confidence, etc.) |
+| `count` | `int` | Total items returned |
+
+**Dependencies:** HTTP GET to FastAPI `/api/v1/rag/evidence/{ticker}`.
+
+---
+
+#### `generate_justification`
+
+**Description:** Generate an evidence-backed LLM justification for a specific V^R dimension score using the CS4 RAG pipeline.
+
+**Input schema:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `company_id` | `string` | Yes | Ticker symbol |
+| `dimension` | `string` | Yes | One of the 7 V^R dimensions |
+
+**Output fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `dimension` | `string` | Dimension name |
+| `score` | `float` | Numeric score (0–100) |
+| `level` | `int` | Rubric level (1–5) |
+| `level_name` | `string` | e.g. `"Nascent"`, `"Developing"`, `"Adequate"`, `"Good"`, `"Excellent"` |
+| `evidence_strength` | `string` | `"strong"` / `"moderate"` / `"weak"` |
+| `rubric_criteria` | `string` | Matched rubric text |
+| `supporting_evidence` | `List[Dict]` | Up to 5 cited evidence items |
+| `gaps_identified` | `List[str]` | Gaps found for this dimension |
+
+**Dependencies:** HTTP GET to FastAPI `/api/v1/rag/justify/{ticker}/{dimension}`.
+
+---
+
+#### `project_ebitda_impact`
+
+**Description:** Project EBITDA improvement from raising a company's Org-AI-R score. Uses sector-specific multipliers and H^R risk adjustment. Pure local calculation — no external API calls required.
+
+**Input schema:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `company_id` | `string` | Yes | Ticker symbol |
+| `entry_score` | `number` | Yes | Current Org-AI-R score (0–100) |
+| `target_score` | `number` | Yes | Target Org-AI-R score (0–100) |
+| `h_r_score` | `number` | Yes | H^R score for risk adjustment (0–100) |
+
+**Output fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `delta_air` | `float` | Score improvement (target − entry) |
+| `scenarios` | `Dict` | `{conservative, base, optimistic}` — each a percentage string |
+| `risk_adjusted` | `string` | H^R-adjusted net impact percentage |
+| `requires_approval` | `bool` | True if `delta > 20` or `adjusted_impact > 10%` |
+
+**Dependencies:** None (local `EBITDACalculator` + `COMPANY_SECTORS` mapping).
+
+---
+
+#### `run_gap_analysis`
+
+**Description:** Identify dimension-level gaps between current Org-AI-R and a target score. Returns prioritised gaps with improvement actions.
+
+**Input schema:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `company_id` | `string` | Yes | Ticker symbol |
+| `target_org_air` | `number` | Yes | Target Org-AI-R score (0–100) |
+
+**Output fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `company_id` | `string` | Ticker |
+| `current_org_air` | `float` | Current composite score |
+| `target_org_air` | `float` | Requested target |
+| `total_gap` | `float` | target − current |
+| `dimensions` | `List[Dict]` | Per-dimension gaps (current, target, gap, priority, actions) |
+| `top_priorities` | `List[str]` | Top 3 dimensions to improve |
+| `estimated_improvement_potential` | `float` | Achievable score improvement |
+
+**Dependencies:** CS3Client (Snowflake) for current assessment + local `GapAnalyzer`.
+
+---
+
+#### `get_portfolio_summary`
+
+**Description:** Get fund-level portfolio view aggregating all CS3 portfolio companies (NVDA, JPM, WMT, GE, DG).
+
+**Input schema:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `fund_id` | `string` | No | `"PE-FUND-I"` | Fund identifier |
+
+**Output fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fund_id` | `string` | Fund identifier |
+| `fund_air` | `float` | Average Org-AI-R across portfolio |
+| `company_count` | `int` | Number of companies |
+| `companies` | `List[Dict]` | Per-company `{ticker, org_air, sector}` |
+
+**Dependencies:** `CompositeScoringRepository` (Snowflake) + `COMPANY_SECTORS` mapping.
+
+---
+
+### 19.2 Resources
+
+#### `orgair://parameters/v2.0`
+
+**Name:** Org-AI-R Scoring Parameters v2.0
+**Description:** Current scoring parameters, dimension weights, and HITL thresholds.
+
+**Response:**
+```json
+{
+  "version": "2.0",
+  "alpha": 0.6,
+  "beta": 0.12,
+  "gamma_0": 0.0025,
+  "gamma_1": 0.05,
+  "gamma_2": 0.025,
+  "gamma_3": 0.01,
+  "lambda_penalty": 0.05,
+  "delta_position": 0.15,
+  "alpha_vr_weight": 0.6,
+  "beta_synergy_weight": 0.12,
+  "dimension_weights": {
+    "data_infrastructure": 0.15,
+    "ai_governance": 0.15,
+    "technology_stack": 0.15,
+    "talent": 0.20,
+    "leadership": 0.10,
+    "use_case_portfolio": 0.15,
+    "culture": 0.10
+  },
+  "hitl_thresholds": {
+    "score_change": 15,
+    "ebitda_projection": 5.0
+  }
+}
+```
+
+---
+
+#### `orgair://sectors`
+
+**Name:** Sector Definitions
+**Description:** Portfolio company sector assignments with EBITDA multipliers and implementation cost factors.
+
+**Response:**
+```json
+{
+  "portfolio_companies": {
+    "NVDA": { "name": "NVIDIA", "sector": "technology", "ebitda_multiplier": 0.45, "implementation_cost_factor": 0.08 },
+    "JPM": { "name": "JPMorgan Chase", "sector": "financial_services", "ebitda_multiplier": 0.38, "implementation_cost_factor": 0.12 },
+    "WMT": { "name": "Walmart", "sector": "retail", "ebitda_multiplier": 0.28, "implementation_cost_factor": 0.10 },
+    "GE": { "name": "GE Aerospace", "sector": "manufacturing", "ebitda_multiplier": 0.30, "implementation_cost_factor": 0.14 },
+    "DG": { "name": "Dollar General", "sector": "retail", "ebitda_multiplier": 0.28, "implementation_cost_factor": 0.10 }
+  },
+  "sector_baselines": {
+    "technology": { "h_r_base": 85, "weight_talent": 0.18 },
+    "financial_services": { "h_r_base": 72, "weight_governance": 0.18 },
+    "retail": { "h_r_base": 57, "weight_use_cases": 0.15 },
+    "manufacturing": { "h_r_base": 52, "weight_data_infra": 0.20 }
+  }
+}
+```
+
+---
+
+### 19.3 Prompts
+
+#### `due_diligence_assessment`
+
+**Description:** Complete due diligence assessment for a portfolio company.
+
+**Arguments:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `company_id` | Yes | Ticker symbol (NVDA, JPM, WMT, GE, DG) |
+
+**Generated workflow (5 steps):**
+1. Calculate the Org-AI-R score using `calculate_org_air_score`.
+2. For any dimensions scoring below 60, call `generate_justification` to understand evidence and gaps.
+3. Run `run_gap_analysis` targeting `org_air=75`.
+4. Project EBITDA impact using `project_ebitda_impact` with the current score as entry and 75 as target.
+5. Summarise findings: strengths, gaps, and value-creation actions.
+
+---
+
+#### `ic_meeting_prep`
+
+**Description:** Prepare Investment Committee meeting package for a company.
+
+**Arguments:**
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `company_id` | Yes | Ticker symbol (NVDA, JPM, WMT, GE, DG) |
+
+**Generated workflow (6 steps):**
+1. Retrieve the portfolio summary with `get_portfolio_summary` to benchmark the company against the fund.
+2. Get the full Org-AI-R score with `calculate_org_air_score`.
+3. Pull supporting evidence with `get_company_evidence` for the top 2 strongest and weakest dimensions.
+4. Generate justifications with `generate_justification` for each of those dimensions.
+5. Project EBITDA impact across conservative / base / optimistic scenarios using `project_ebitda_impact`.
+6. Produce a one-page IC memo: executive summary, score vs peers, key risks, and recommended value-creation initiatives.
+
+---
+
+## Observability — Prometheus Metrics (CS5)
+
+> **Source:** `app/services/observability/metrics.py`
+> **Library:** `prometheus_client`
+
+### Metric Definitions
+
+| Metric | Type | Labels | Buckets | Description |
+|--------|------|--------|---------|-------------|
+| `mcp_tool_calls_total` | Counter | `tool_name`, `status` | — | Total MCP tool invocations |
+| `mcp_tool_duration_seconds` | Histogram | `tool_name` | 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0 | MCP tool call duration |
+| `agent_invocations_total` | Counter | `agent_name`, `status` | — | Total LangGraph agent node invocations |
+| `agent_duration_seconds` | Histogram | `agent_name` | 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0 | Agent node execution duration |
+| `hitl_approvals_total` | Counter | `reason`, `decision` | — | HITL approval gate decisions |
+| `cs_client_calls_total` | Counter | `service`, `endpoint`, `status` | — | Calls to CS1–CS4 backend services |
+
+### Instrumentation Decorators
+
+| Decorator | Applies to | Behaviour |
+|-----------|-----------|-----------|
+| `@track_mcp_tool(tool_name)` | Async MCP tool functions | Increments `mcp_tool_calls_total` (success/error), observes `mcp_tool_duration_seconds` |
+| `@track_agent(agent_name)` | Async agent node functions | Increments `agent_invocations_total` (success/error), observes `agent_duration_seconds` |
+| `@track_cs_client(service, endpoint)` | Sync CS client methods | Increments `cs_client_calls_total` (success/error) |
+
+---
+
+## Agent Architecture Reference (CS5)
+
+> **Sources:** `app/agents/state.py`, `app/agents/specialists.py`, `app/agents/supervisor.py`
+
+### DueDiligenceState Schema
+
+| Field | Type | Written by | Description |
+|-------|------|-----------|-------------|
+| `company_id` | `str` | Caller | Ticker symbol (e.g. `"NVDA"`) |
+| `assessment_type` | `Literal["screening", "limited", "full"]` | Caller | Workflow depth |
+| `requested_by` | `str` | Caller | Analyst identity |
+| `messages` | `List[AgentMessage]` | All agents (append-only) | Conversation history via `operator.add` reducer |
+| `sec_analysis` | `Dict \| None` | SEC agent | CS2 evidence summary (findings, dimensions covered) |
+| `talent_analysis` | `Dict \| None` | Evidence agent | CS2 talent dimension evidence |
+| `scoring_result` | `Dict \| None` | Scoring agent | CS3 Org-AI-R composite (org_air, vr, hr, synergy, dimensions) |
+| `evidence_justifications` | `Dict \| None` | Evidence agent | CS4 per-dimension justifications |
+| `value_creation_plan` | `Dict \| None` | Value creation agent | Gap analysis + EBITDA projection |
+| `next_agent` | `str \| None` | Supervisor | Routes to next node |
+| `requires_approval` | `bool` | Scoring / Value agents | HITL gate flag |
+| `approval_reason` | `str \| None` | Scoring / Value agents | Human-readable HITL reason |
+| `approval_status` | `Literal["pending", "approved", "rejected"] \| None` | HITL node | Gate decision |
+| `approved_by` | `str \| None` | HITL node | Approver identity |
+| `started_at` | `datetime` | Caller | UTC start time |
+| `completed_at` | `datetime \| None` | Supervisor (complete) | UTC completion time |
+| `total_tokens` | `int` | Agents | Cumulative LLM token count |
+| `error` | `str \| None` | Any agent | Error message on failure |
+
+### Specialist Agents
+
+| Agent | Class | LLM | Tools Used | Reads | Writes | HITL Trigger |
+|-------|-------|-----|-----------|-------|--------|-------------|
+| SEC Analyst | `SECAnalysisAgent` | GPT-4o | `get_company_evidence` | `company_id` | `sec_analysis` | — |
+| Scorer | `ScoringAgent` | Claude Sonnet | `calculate_org_air_score`, `generate_justification` | `company_id` | `scoring_result` | Score outside [40, 85] |
+| Evidence | `EvidenceAgent` | GPT-4o | `get_company_evidence`, `generate_justification` | `company_id` | `talent_analysis`, `evidence_justifications` | — |
+| Value Creator | `ValueCreationAgent` | GPT-4o | `run_gap_analysis`, `project_ebitda_impact` | `company_id`, `scoring_result` | `value_creation_plan` | EBITDA projection > threshold |
+
+### HITL Approval Gates
+
+The supervisor routes to the `hitl_approval` node when `requires_approval == True` and `approval_status == "pending"`. HITL is triggered by:
+
+- **Scoring agent:** Org-AI-R score outside normal range (below 40 or above 85).
+- **Value creation agent:** Projected EBITDA impact exceeds the configured threshold, or `requires_approval` is already set from scoring.
+
+In exercise mode, the HITL node auto-approves with `approved_by="exercise_auto_approve"`. In production, this gate would send a Slack/email notification and wait for a human decision.
+
+### Assessment Types
+
+| Type | Agents Run | Use Case |
+|------|-----------|----------|
+| `screening` | SEC → Scorer → complete | Quick score check, skip value creation |
+| `limited` | SEC → Scorer → Evidence → complete | Score + justifications, no EBITDA |
+| `full` | SEC → Scorer → Evidence → Value Creator → complete | Full DD with gap analysis and EBITDA |
+
+---
+
+*Generated 2026-03-22*
