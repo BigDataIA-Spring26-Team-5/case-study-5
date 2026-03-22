@@ -208,7 +208,8 @@ class MCPToolCaller:
             row = {k.lower(): v for k, v in row.items()}
             current_org_air = float(row.get("org_air") or 0.0)
 
-        # Dimension scores from the dimensions endpoint
+        # Dimension scores from the dimensions endpoint, normalised to short names
+        from app.services.integration.cs3_client import _DIM_ALIAS_MAP
         dim_scores: Dict[str, float] = {}
         try:
             r = self._http.get(f"{self.base_url}/api/v1/scoring/{ticker}/dimensions")
@@ -216,7 +217,7 @@ class MCPToolCaller:
                 for d in r.json().get("scores", []):
                     dim = d.get("dimension", "")
                     if dim:
-                        dim_scores[dim] = float(d.get("score", 0.0))
+                        dim_scores[_DIM_ALIAS_MAP.get(dim, dim)] = float(d.get("score", 0.0))
         except Exception:
             pass
 
@@ -225,13 +226,18 @@ class MCPToolCaller:
 
     # ── Tool 6: get_portfolio_summary ────────────────────────────────────────
     def get_portfolio_summary(self, fund_id: str = "PE-FUND-I") -> Dict[str, Any]:
-        """CS3Client iteration over all portfolio tickers."""
+        """Reads org_air from SCORING table (same source as Tool 1)."""
         from app.services.composite_scoring_service import COMPANY_SECTORS
         from app.config.company_mappings import CS3_PORTFOLIO
+        repo = self._get_composite_repo()
         companies = []
         for ticker in CS3_PORTFOLIO:
-            assessment = self._get_cs3().get_assessment(ticker)
-            org_air = assessment.org_air_score if assessment else 0.0
+            row = repo._query(ticker, ["ticker", "org_air"])
+            if row:
+                row = {k.lower(): v for k, v in row.items()}
+                org_air = float(row.get("org_air") or 0.0)
+            else:
+                org_air = 0.0
             companies.append({
                 "ticker": ticker,
                 "org_air": org_air,

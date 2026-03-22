@@ -470,7 +470,8 @@ async def _run_gap_analysis(args: dict) -> dict:
     assessment = await asyncio.to_thread(client.get_assessment, ticker)
 
     if assessment:
-        dim_scores = {dim: ds.score for dim, ds in assessment.dimension_scores.items()}
+        from app.services.integration.cs3_client import _DIM_ALIAS_MAP
+        dim_scores = {_DIM_ALIAS_MAP.get(dim, dim): ds.score for dim, ds in assessment.dimension_scores.items()}
         current_org_air = assessment.org_air_score
     else:
         dim_scores = {}
@@ -489,12 +490,17 @@ async def _get_portfolio_summary(args: dict) -> dict:
     from app.config.company_mappings import CS3_PORTFOLIO
 
     fund_id = args.get("fund_id", "PE-FUND-I")
-    client = await asyncio.to_thread(_cs3)
     companies = []
 
+    from app.repositories.composite_scoring_repository import CompositeScoringRepository
+    repo = CompositeScoringRepository()
     for ticker in CS3_PORTFOLIO:
-        assessment = await asyncio.to_thread(client.get_assessment, ticker)
-        org_air = assessment.org_air_score if assessment else 0.0
+        row = await asyncio.to_thread(repo._query, ticker, ["ticker", "org_air"])
+        if row:
+            row_lower = {k.lower(): v for k, v in row.items()}
+            org_air = float(row_lower.get("org_air") or 0.0)
+        else:
+            org_air = 0.0
         companies.append({
             "ticker": ticker,
             "org_air": org_air,
