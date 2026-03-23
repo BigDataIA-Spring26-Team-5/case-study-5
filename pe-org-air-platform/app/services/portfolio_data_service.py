@@ -80,14 +80,14 @@ class PortfolioDataService:
         cs1_client: CS1Client,
         cs2_client: CS2Client,
         cs3_client: CS3Client,
-        cs4_client: CS4Client,
-        composite_scoring_service: CompositeScoringService,
+        cs4_client: Optional[CS4Client] = None,
+        composite_scoring_service: Optional[CompositeScoringService] = None,
     ):
         self.cs1 = cs1_client
         self.cs2 = cs2_client
         self.cs3 = cs3_client
         self.cs4 = cs4_client
-        self.scoring = composite_scoring_service
+        self.scoring = composite_scoring_service or CompositeScoringService()
         self.ebitda_calculator = EBITDACalculator()
         self.gap_analyzer = GapAnalyzer()
 
@@ -161,6 +161,8 @@ class PortfolioDataService:
         self, ticker: str, dimension: str
     ) -> Dict[str, Any]:
         """Generate evidence-backed justification via CS4."""
+        if self.cs4 is None:
+            raise RuntimeError("CS4 client not available (ChromaDB/onnxruntime missing)")
         result = self.cs4.generate_justification(ticker.upper(), dimension)
         return result.to_dict()
 

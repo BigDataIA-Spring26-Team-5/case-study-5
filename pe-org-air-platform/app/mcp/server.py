@@ -122,11 +122,16 @@ def _portfolio() -> Any:
     if _portfolio_svc is None:
         from app.services.integration.cs1_client import CS1Client
         from app.services.portfolio_data_service import PortfolioDataService
+        try:
+            cs4 = _cs4()
+        except Exception as e:
+            logger.warning("cs4_client_init_failed", error=str(e))
+            cs4 = None
         _portfolio_svc = PortfolioDataService(
             cs1_client=CS1Client(),
             cs2_client=_cs2(),
             cs3_client=_cs3(),
-            cs4_client=_cs4(),
+            cs4_client=cs4,
             composite_scoring_service=_composite(),
         )
     return _portfolio_svc
