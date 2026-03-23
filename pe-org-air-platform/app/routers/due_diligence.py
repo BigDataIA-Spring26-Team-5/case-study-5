@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from langgraph.types import Command
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,12 @@ class DDSummary(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error: Optional[str] = None
+
+
+class DDApprovalRequest(BaseModel):
+    decision: str          # "approved" or "rejected"
+    approved_by: str
+    comments: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +160,12 @@ async def run_due_diligence(
         logger.error("DD workflow failed ticker=%s: %s", ticker, e)
         raise HTTPException(status_code=500, detail=f"Workflow error: {e}")
 
-    logger.info("DD workflow complete ticker=%s thread=%s", ticker, thread_id)
+    # Check if graph paused at HITL interrupt (not yet completed)
+    if final_state.get("approval_status") == "pending" and not final_state.get("completed_at"):
+        logger.info("DD workflow paused for HITL ticker=%s thread=%s", ticker, thread_id)
+    else:
+        logger.info("DD workflow complete ticker=%s thread=%s", ticker, thread_id)
+
     return _extract_summary(ticker, thread_id, final_state)
 
 
@@ -185,3 +197,60 @@ async def get_dd_status(thread_id: str) -> DDSummary:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Status fetch error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/dd/approve/{thread_id}
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/approve/{thread_id}",
+    response_model=DDSummary,
+    summary="Approve or reject a paused HITL due diligence run",
+    description=(
+        "Resumes a graph that paused at an interrupt() HITL gate. "
+        "Pass decision='approved' or 'rejected' to continue the workflow."
+    ),
+)
+async def approve_due_diligence(thread_id: str, body: DDApprovalRequest) -> DDSummary:
+    try:
+        from app.agents.supervisor import dd_graph
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"LangGraph not available: {e}")
+
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # Verify the thread exists and is actually paused
+    try:
+        snapshot = await dd_graph.aget_state(config)
+        if snapshot is None or snapshot.values is None:
+            raise HTTPException(status_code=404, detail=f"No run found for thread_id: {thread_id}")
+        if not snapshot.next:
+            raise HTTPException(status_code=409, detail="Workflow is not paused — nothing to approve.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"State fetch error: {e}")
+
+    # Resume the graph with the human decision
+    decision_payload = {
+        "decision": body.decision,
+        "approved_by": body.approved_by,
+        "comments": body.comments,
+    }
+
+    try:
+        final_state = await dd_graph.ainvoke(
+            Command(resume=decision_payload), config
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Resume error: {e}")
+
+    ticker = snapshot.values.get("company_id", "UNKNOWN").upper()
+
+    if final_state.get("approval_status") == "pending" and not final_state.get("completed_at"):
+        logger.info("DD workflow still paused after approval ticker=%s thread=%s", ticker, thread_id)
+    else:
+        logger.info("DD workflow resumed and complete ticker=%s thread=%s", ticker, thread_id)
+
+    return _extract_summary(ticker, thread_id, final_state)

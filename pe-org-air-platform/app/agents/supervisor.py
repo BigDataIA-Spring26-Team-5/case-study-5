@@ -27,6 +27,7 @@ from typing import Any, Dict
 import structlog
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
 
 from app.agents.state import AgentMessage, DueDiligenceState
 from app.agents.specialists import (
@@ -117,8 +118,9 @@ async def value_creator_node(state: DueDiligenceState) -> Dict[str, Any]:
 def hitl_approval_node(state: DueDiligenceState) -> Dict[str, Any]:
     """Human-in-the-loop gate.
 
-    Production: send Slack/email notification and block until human responds.
-    Exercise: auto-approves after logging the reason.
+    Calls interrupt() to pause the graph and send a payload to the caller.
+    The graph resumes when Command(resume=<decision>) is invoked via the
+    POST /api/v1/dd/approve/{thread_id} endpoint.
     """
     logger.warning(
         "hitl_approval_required",
@@ -126,20 +128,47 @@ def hitl_approval_node(state: DueDiligenceState) -> Dict[str, Any]:
         reason=state.get("approval_reason"),
     )
 
-    # In production replace this block with a real approval mechanism.
-    return {
-        "approval_status": "approved",
-        "approved_by": "exercise_auto_approve",
-        "requires_approval": False,   # reset so the supervisor loop continues
-        "messages": [
-            AgentMessage(
-                role="system",
-                content=f"HITL approval granted: {state.get('approval_reason')}",
-                agent_name="hitl",
-                timestamp=datetime.now(tz=timezone.utc),
-            )
-        ],
-    }
+    # Pause the graph — returns payload to the caller, blocks until resumed.
+    decision = interrupt({
+        "company_id": state["company_id"],
+        "approval_reason": state.get("approval_reason"),
+        "scoring_result": state.get("scoring_result"),
+    })
+
+    # After resume: decision is the value passed via Command(resume=...)
+    # Expected shape: {"decision": "approved"|"rejected", "approved_by": "...", "comments": "..."}
+    status = decision.get("decision", "rejected")
+    approver = decision.get("approved_by", "unknown")
+    comments = decision.get("comments", "")
+
+    if status == "approved":
+        return {
+            "approval_status": "approved",
+            "approved_by": approver,
+            "requires_approval": False,
+            "messages": [
+                AgentMessage(
+                    role="system",
+                    content=f"HITL approved by {approver}: {comments or state.get('approval_reason')}",
+                    agent_name="hitl",
+                    timestamp=datetime.now(tz=timezone.utc),
+                )
+            ],
+        }
+    else:
+        return {
+            "approval_status": "rejected",
+            "approved_by": approver,
+            "requires_approval": False,
+            "messages": [
+                AgentMessage(
+                    role="system",
+                    content=f"HITL rejected by {approver}: {comments}",
+                    agent_name="hitl",
+                    timestamp=datetime.now(tz=timezone.utc),
+                )
+            ],
+        }
 
 
 # ---------------------------------------------------------------------------
