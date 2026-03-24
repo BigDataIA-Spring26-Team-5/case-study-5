@@ -98,6 +98,7 @@ class HybridRetriever:
         sparse_weight: float = 0.4,
         rrf_k: int = 60,
         persist_dir: str = "./chroma_data",
+        vector_store: Optional["VectorStore"] = None,
     ):
         self.dense_weight = dense_weight
         self.sparse_weight = sparse_weight
@@ -105,7 +106,7 @@ class HybridRetriever:
         self.persist_dir = persist_dir
 
         # Dense index via VectorStore (uses Chroma Cloud HTTP API)
-        self._vector_store = VectorStore(persist_dir=persist_dir)
+        self._vector_store = vector_store or VectorStore(persist_dir=persist_dir)
 
         # Sparse index
         self._bm25: Optional[Any] = None

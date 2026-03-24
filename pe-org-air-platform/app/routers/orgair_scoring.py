@@ -8,8 +8,7 @@ Endpoints:
 """
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID
 import logging
 import time
@@ -30,45 +29,18 @@ from app.core.dependencies import (
     get_leadership_service,
 )
 from app.core.errors import NotFoundError
+from app.schemas.portfolio import (
+    PortfolioOrgAIRRequest,
+    PortfolioOrgAIRResponse,
+    ResultsGenerationResponse,
+    MAX_TICKERS_FOR_RANGE_ESTIMATION,
+)
 from app.schemas.scoring import CompanyAssessmentRead, DimensionScoreRead
 from app.services.composite_scoring_service import OrgAIRResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/scoring", tags=["CS3 Org-AI-R"])
-
-
-# =====================================================================
-# Response Models
-# =====================================================================
-
-class PortfolioOrgAIRResponse(BaseModel):
-    status: str
-    companies_scored: int
-    companies_failed: int
-    results: List[OrgAIRResponse]
-    summary_table: List[Dict[str, Any]]
-    duration_seconds: float
-
-
-class ResultsGenerationResponse(BaseModel):
-    status: str
-    files_generated: int
-    local_files: List[str]
-    s3_files: List[str]
-    summary: List[Dict[str, Any]]
-    duration_seconds: float
-
-
-class PortfolioOrgAIRRequest(BaseModel):
-    tickers: Optional[List[str]] = None
-    fund_id: Optional[str] = None
-    company_ids: Optional[List[str]] = None
-    limit: Optional[int] = None
-    offset: int = 0
-    prepare_if_missing: bool = True
-    estimate_ranges: bool = True
-    range_strategy: str = "groq"  # "groq" | "ci" | "none"
 
 
 # =====================================================================
@@ -160,7 +132,7 @@ async def score_portfolio_orgair(
         if not tickers:
             tickers = list(CS3_PORTFOLIO)
 
-    async def _maybe_await(fn: Callable, *args, **kwargs):
+    async def _maybe_await(fn: Callable, *args, **kwargs) -> Any:
         out = fn(*args, **kwargs)
         if hasattr(out, "__await__"):
             return await out
@@ -274,7 +246,7 @@ async def score_portfolio_orgair(
     # Expected-range validation is only defined for the CS3 calibration set.
     # For other tickers we can estimate a helpful range.
     llm_router = None
-    if req and req.estimate_ranges and req.range_strategy.lower() == "groq" and len(tickers) <= 10:
+    if req and req.estimate_ranges and req.range_strategy.lower() == "groq" and len(tickers) <= MAX_TICKERS_FOR_RANGE_ESTIMATION:
         try:
             from app.services.llm.router import get_llm_router
             llm_router = get_llm_router()

@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y \
     libgbm1 \
     libasound2 \
     libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
     libcairo2 \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*

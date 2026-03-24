@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import get_company_repository
+from app.core.errors import NotFoundError
 
 router = APIRouter(prefix="/api/v1/portfolios", tags=["Portfolios"])
 
@@ -26,7 +27,7 @@ async def get_portfolio(
 ) -> Dict[str, Any]:
     portfolio = company_repo.get_portfolio(portfolio_id)
     if not portfolio:
-        raise HTTPException(status_code=404, detail=f"Portfolio not found: {portfolio_id}")
+        raise NotFoundError("portfolio", portfolio_id)
     return portfolio
 
 

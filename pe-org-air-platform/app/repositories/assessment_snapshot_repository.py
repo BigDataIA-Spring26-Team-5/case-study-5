@@ -25,6 +25,7 @@ class AssessmentSnapshotRepository(BaseRepository):
     TABLE_NAME = "CS5_ASSESSMENT_SNAPSHOTS"
 
     def ensure_table(self) -> None:
+        """Create the CS5_ASSESSMENT_SNAPSHOTS table if it does not exist."""
         sql = f"""
         CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
             id                    VARCHAR(36)   NOT NULL PRIMARY KEY,
@@ -63,6 +64,7 @@ class AssessmentSnapshotRepository(BaseRepository):
         evidence_count: int,
         dimension_scores: Dict[str, float],
     ) -> str:
+        """Insert a new assessment snapshot and return its UUID."""
         self.ensure_table()
         snapshot_id = str(uuid4())
         sql = f"""
@@ -102,6 +104,7 @@ class AssessmentSnapshotRepository(BaseRepository):
         portfolio_id: Optional[str] = None,
         days: int = 365,
     ) -> List[Dict[str, Any]]:
+        """Return snapshots for a ticker within the given lookback window."""
         self.ensure_table()
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         where = ["UPPER(ticker) = UPPER(%s)", "captured_at >= %s"]
@@ -136,6 +139,7 @@ class AssessmentSnapshotRepository(BaseRepository):
         ticker: str,
         portfolio_id: Optional[str] = None,
     ) -> Optional[float]:
+        """Return the earliest recorded Org-AI-R score for a ticker."""
         self.ensure_table()
         where = ["UPPER(ticker) = UPPER(%s)"]
         params: List[Any] = [ticker.upper()]

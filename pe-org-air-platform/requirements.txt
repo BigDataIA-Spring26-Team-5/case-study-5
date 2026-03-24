@@ -91,4 +91,3 @@ nest_asyncio>=1.6.0
 
 # CS5 Bonus features
 mem0ai>=0.1.0
-python-docx>=1.1.0

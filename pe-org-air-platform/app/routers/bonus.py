@@ -3,8 +3,8 @@
 Implements the CS5 extensions section:
 - Mem0 semantic memory
 - Investment tracker with ROI
-- IC memo generator (Word doc)
-- LP letter generator (Word doc)
+- IC memo generator (PDF)
+- LP letter generator (PDF)
 """
 
 from __future__ import annotations
@@ -13,14 +13,16 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from fastapi.responses import FileResponse
 
 from app.core.dependencies import (
+    get_assessment_snapshot_repository,
     get_composite_scoring_repository,
     get_scoring_repository,
     get_portfolio_data_service,
 )
+from app.core.errors import ConflictError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/bonus", tags=["CS5 — Bonus"])
 
@@ -57,23 +59,23 @@ async def compute_roi(
         None, description="Optional override for entry Org-AI-R score"
     ),
     composite_repo=Depends(get_composite_scoring_repository),
+    snapshot_repo=Depends(get_assessment_snapshot_repository),
 ):
     from app.services.tracking.investment_tracker import investment_tracker
-    from app.repositories.assessment_snapshot_repository import AssessmentSnapshotRepository
 
     ticker_u = _safe_ticker(ticker)
     row = composite_repo.fetch_orgair_row(ticker_u)
     if not row:
-        raise HTTPException(status_code=404, detail=f"No scoring row found for {ticker_u}")
+        raise NotFoundError("scoring_row", ticker_u)
     r = {k.lower(): v for k, v in row.items()}
     current_org_air = float(r.get("org_air") or 0.0)
     if current_org_air <= 0:
-        raise HTTPException(status_code=409, detail=f"Org-AI-R not computed for {ticker_u} yet")
+        raise ConflictError(f"Org-AI-R not computed for {ticker_u} yet")
 
     entry = entry_org_air
     if entry is None:
         try:
-            entry = AssessmentSnapshotRepository().get_entry_org_air(ticker=ticker_u, portfolio_id=None)
+            entry = snapshot_repo.get_entry_org_air(ticker=ticker_u, portfolio_id=None)
         except Exception:
             entry = None
 
@@ -97,7 +99,7 @@ async def recall_memory(
     return payload
 
 
-@router.post("/reports/ic-memo/{ticker}", summary="Generate IC memo (.docx) for a company")
+@router.post("/reports/ic-memo/{ticker}", summary="Generate IC memo (.pdf) for a company")
 async def generate_ic_memo(
     ticker: str,
     target_org_air: float = Query(85.0, description="Target Org-AI-R for gap analysis / value creation"),
@@ -119,7 +121,7 @@ async def generate_ic_memo(
 
     row = composite_repo.fetch_orgair_row(ticker_u)
     if not row:
-        raise HTTPException(status_code=404, detail=f"No scoring row found for {ticker_u}")
+        raise NotFoundError("scoring_row", ticker_u)
     r = {k.lower(): v for k, v in row.items()}
     scoring_result: Dict[str, Any] = {
         "company_id": ticker_u,
@@ -152,7 +154,7 @@ async def generate_ic_memo(
 
     out_path = os.path.join(
         _reports_subdir("ic_memo"),
-        f"ic_memo_{ticker_u}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.docx",
+        f"ic_memo_{ticker_u}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.pdf",
     )
     path = ic_memo_generator.generate(
         company_id=ticker_u,
@@ -169,7 +171,7 @@ async def generate_ic_memo(
     return FileResponse(path, filename=os.path.basename(path), background=background)
 
 
-@router.post("/reports/lp-letter/{fund_id}", summary="Generate LP letter (.docx) for a fund")
+@router.post("/reports/lp-letter/{fund_id}", summary="Generate LP letter (.pdf) for a fund")
 async def generate_lp_letter(
     fund_id: str,
     persist: bool = Query(
@@ -211,7 +213,7 @@ async def generate_lp_letter(
 
     out_path = os.path.join(
         _reports_subdir("lp_letter"),
-        f"lp_letter_{fund_id}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.docx",
+        f"lp_letter_{fund_id}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.pdf",
     )
     path = lp_letter_generator.generate(
         fund_id=fund_id,

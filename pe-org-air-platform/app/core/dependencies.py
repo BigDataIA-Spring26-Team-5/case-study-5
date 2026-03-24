@@ -54,6 +54,10 @@ def get_chunk_repository(request: Request):
     return request.app.state.chunk_repository
 
 
+def get_assessment_snapshot_repository(request: Request):
+    return request.app.state.assessment_snapshot_repository
+
+
 # ── Service providers ────────────────────────────────────────────────────────
 
 def get_vector_store(request: Request):

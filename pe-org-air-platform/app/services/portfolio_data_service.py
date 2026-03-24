@@ -82,6 +82,10 @@ class PortfolioDataService:
         cs3_client: CS3Client,
         cs4_client: Optional[CS4Client] = None,
         composite_scoring_service: Optional[CompositeScoringService] = None,
+        company_repo=None,
+        snapshot_repo=None,
+        scoring_repo=None,
+        composite_repo=None,
     ):
         self.cs1 = cs1_client
         self.cs2 = cs2_client
@@ -90,10 +94,10 @@ class PortfolioDataService:
         self.scoring = composite_scoring_service or CompositeScoringService()
         self.ebitda_calculator = EBITDACalculator()
         self.gap_analyzer = GapAnalyzer()
-        self._company_repo = None
-        self._snapshot_repo = None
-        self._scoring_repo = None
-        self._composite_repo = None
+        self._company_repo = company_repo
+        self._snapshot_repo = snapshot_repo
+        self._scoring_repo = scoring_repo
+        self._composite_repo = composite_repo
 
     # ------------------------------------------------------------------
     # Internal helpers (lazy Snowflake-backed repos)
@@ -109,25 +113,25 @@ class PortfolioDataService:
             )
         )
 
-    def _get_company_repo(self):
+    def _get_company_repo(self) -> Any:
         if self._company_repo is None:
             from app.repositories.company_repository import CompanyRepository
             self._company_repo = CompanyRepository()
         return self._company_repo
 
-    def _get_snapshot_repo(self):
+    def _get_snapshot_repo(self) -> Any:
         if self._snapshot_repo is None:
             from app.repositories.assessment_snapshot_repository import AssessmentSnapshotRepository
             self._snapshot_repo = AssessmentSnapshotRepository()
         return self._snapshot_repo
 
-    def _get_scoring_repo(self):
+    def _get_scoring_repo(self) -> Any:
         if self._scoring_repo is None:
             from app.repositories.scoring_repository import ScoringRepository
             self._scoring_repo = ScoringRepository()
         return self._scoring_repo
 
-    def _get_composite_repo(self):
+    def _get_composite_repo(self) -> Any:
         if self._composite_repo is None:
             from app.repositories.composite_scoring_repository import CompositeScoringRepository
             self._composite_repo = CompositeScoringRepository()
@@ -141,7 +145,8 @@ class PortfolioDataService:
             return fund_id
         try:
             return self._get_company_repo().find_portfolio_id_by_name(fund_id)
-        except Exception:
+        except Exception as exc:
+            logger.warning("portfolio_id_resolve_failed", fund_id=fund_id, error=str(exc))
             return None
 
     def _get_portfolio_company_rows(self, fund_id: str) -> tuple[Optional[str], List[Dict[str, Any]]]:
@@ -152,8 +157,8 @@ class PortfolioDataService:
                 rows = self._get_company_repo().get_by_portfolio(portfolio_id)
                 if rows:
                     return portfolio_id, rows
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("portfolio_companies_fetch_failed", portfolio_id=portfolio_id, error=str(exc))
         return None, [{"ticker": t} for t in CS3_PORTFOLIO]
 
     # ------------------------------------------------------------------
@@ -291,7 +296,8 @@ class PortfolioDataService:
                 if not dim:
                     continue
                 dim_scores[_DIM_ALIAS_MAP.get(dim, dim)] = float(row.get("score") or 0.0)
-        except Exception:
+        except Exception as exc:
+            logger.warning("dimension_scores_fetch_failed", ticker=ticker, error=str(exc))
             dim_scores = {}
 
         try:
@@ -299,7 +305,8 @@ class PortfolioDataService:
             if row:
                 r = {k.lower(): v for k, v in row.items()}
                 current_org_air = float(r.get("org_air") or 0.0)
-        except Exception:
+        except Exception as exc:
+            logger.warning("composite_repo_fetch_failed", ticker=ticker, error=str(exc))
             current_org_air = 0.0
 
         # Last-resort fallback (external/remote usage only).
@@ -312,8 +319,8 @@ class PortfolioDataService:
                         for dim, ds in assessment.dimension_scores.items()
                     }
                     current_org_air = assessment.org_air_score
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("cs3_gap_analysis_fallback_failed", ticker=ticker, error=str(exc))
 
         result = self.gap_analyzer.analyze(
             company_id=ticker,
@@ -330,8 +337,8 @@ class PortfolioDataService:
     def _get_entry_score(self, ticker: str, portfolio_id: Optional[str]) -> float:
         """Return the earliest recorded Org-AI-R score for this ticker.
 
-        Stub — in production this would query the PORTFOLIO_POSITIONS table.
-        Falls back to current score (delta_since_entry = 0).
+        Queries the CS5_ASSESSMENT_SNAPSHOTS table for the first snapshot.
+        Returns 0.0 if no history exists (delta_since_entry = 0).
         """
         try:
             entry = self._get_snapshot_repo().get_entry_org_air(
@@ -339,7 +346,8 @@ class PortfolioDataService:
                 portfolio_id=portfolio_id,
             )
             return float(entry) if entry is not None else 0.0
-        except Exception:
+        except Exception as exc:
+            logger.warning("entry_score_fetch_failed", ticker=ticker, error=str(exc))
             return 0.0
 
     def get_portfolio_view(self, fund_id: str = "PE-FUND-I") -> Dict[str, Any]:
@@ -371,15 +379,15 @@ class PortfolioDataService:
                     synergy = float(r.get("synergy_score") or 0.0)
                     pf = float(r.get("position_factor") or 0.0)
                     ci = (float(r.get("ci_lower") or 0.0), float(r.get("ci_upper") or 0.0))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("orgair_row_fetch_failed", ticker=ticker, error=str(exc))
 
             try:
                 rows = self._get_scoring_repo().get_dimension_scores(ticker)
                 if rows:
                     dim_scores = {str(d.get("dimension")): float(d.get("score") or 0.0) for d in rows if d.get("dimension")}
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("dimension_scores_view_failed", ticker=ticker, error=str(exc))
 
             # Last resort: CS3 client (external/remote usage only).
             if org_air <= 0 or not dim_scores:
@@ -393,16 +401,16 @@ class PortfolioDataService:
                         pf = pf or assessment.position_factor
                         if not dim_scores:
                             dim_scores = {dim: ds.score for dim, ds in assessment.dimension_scores.items()}
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("cs3_portfolio_fallback_failed", ticker=ticker, error=str(exc))
 
             # Evidence count from CS2
             evidence_count = 0
             try:
                 evidence = self.cs2.get_evidence(ticker=ticker)
                 evidence_count = len(evidence)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("evidence_count_failed", ticker=ticker, error=str(exc))
 
             entry_org_air = self._get_entry_score(ticker, portfolio_id) or org_air
             if entry_org_air <= 0:

@@ -46,7 +46,7 @@ def get_cache() -> Optional[RedisCache]:
         try:
             _cache = RedisCache()
             _cache.client.ping()  # Test connection
-        except Exception:
+        except (redis.RedisError, ConnectionError, OSError):
             _cache = None
     return _cache
 

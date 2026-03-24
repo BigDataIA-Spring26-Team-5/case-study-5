@@ -67,11 +67,14 @@ class AssessmentTrend:
 class AssessmentHistoryService:
     """Tracks assessment history with in-memory cache."""
 
-    def __init__(self, cs1_client: CS1Client, cs3_client: CS3Client):
+    _MAX_CACHE_ENTRIES = 100
+    _MAX_SNAPSHOTS_PER_TICKER = 50
+
+    def __init__(self, cs1_client: CS1Client, cs3_client: CS3Client, snapshot_repo=None):
         self.cs1 = cs1_client
         self.cs3 = cs3_client
         self._cache: Dict[str, List[AssessmentSnapshot]] = defaultdict(list)
-        self._snapshot_repo = None
+        self._snapshot_repo = snapshot_repo
 
     def _get_snapshot_repo(self):
         if self._snapshot_repo is None:
@@ -120,6 +123,11 @@ class AssessmentHistoryService:
 
         await self._store_snapshot(snapshot)
         self._cache[ticker].append(snapshot)
+        if len(self._cache[ticker]) > self._MAX_SNAPSHOTS_PER_TICKER:
+            self._cache[ticker] = self._cache[ticker][-self._MAX_SNAPSHOTS_PER_TICKER:]
+        if len(self._cache) > self._MAX_CACHE_ENTRIES:
+            oldest_key = next(iter(self._cache))
+            del self._cache[oldest_key]
         logger.info(
             "assessment_recorded",
             ticker=ticker,
@@ -154,8 +162,8 @@ class AssessmentHistoryService:
                 evidence_count=int(snapshot.evidence_count or 0),
                 dimension_scores={k: float(v) for k, v in (snapshot.dimension_scores or {}).items()},
             )
-        except Exception:
-            logger.warning("snapshot_persist_failed", company_id=snapshot.company_id)
+        except Exception as exc:
+            logger.warning("snapshot_persist_failed", company_id=snapshot.company_id, error=str(exc))
 
     async def get_history(
         self, company_id: str, days: int = 365, portfolio_id: Optional[str] = None
@@ -199,8 +207,8 @@ class AssessmentHistoryService:
                 )
             if out:
                 return out
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("snapshot_db_fetch_failed", ticker=ticker, error=str(exc))
 
         snapshots = self._cache.get(ticker, [])
         return [s for s in snapshots if datetime.fromisoformat(s.timestamp) >= cutoff]

@@ -33,6 +33,7 @@ def _create_singletons(app: FastAPI) -> None:
     from app.repositories.scoring_repository import ScoringRepository
     from app.repositories.composite_scoring_repository import CompositeScoringRepository
     from app.repositories.health_repository import HealthRepository
+    from app.repositories.assessment_snapshot_repository import AssessmentSnapshotRepository
 
     app.state.company_repository = CompanyRepository()
     app.state.industry_repository = IndustryRepository()
@@ -44,6 +45,7 @@ def _create_singletons(app: FastAPI) -> None:
     app.state.scoring_repository = ScoringRepository()
     app.state.composite_scoring_repository = CompositeScoringRepository()
     app.state.health_repository = HealthRepository()
+    app.state.assessment_snapshot_repository = AssessmentSnapshotRepository()
 
     # ── 2. Infrastructure services (no-arg constructors) ─────────────────
     from app.services.s3_storage import S3StorageService
@@ -61,7 +63,7 @@ def _create_singletons(app: FastAPI) -> None:
     # ── 3. HybridRetriever ───────────────────────────────────────────────
     from app.services.retrieval.hybrid import HybridRetriever
 
-    app.state.hybrid_retriever = HybridRetriever()
+    app.state.hybrid_retriever = HybridRetriever(vector_store=app.state.vector_store)
 
     # Rebuild BM25 from persistent ChromaDB data (full coverage, not seed-query subset)
     doc_count = app.state.hybrid_retriever.rebuild_sparse_index_from_chroma()
@@ -173,10 +175,15 @@ def _create_singletons(app: FastAPI) -> None:
         cs3_client=app.state.cs3_client,
         cs4_client=app.state.cs4_client,
         composite_scoring_service=app.state.composite_scoring_service,
+        company_repo=app.state.company_repository,
+        snapshot_repo=app.state.assessment_snapshot_repository,
+        scoring_repo=app.state.scoring_repository,
+        composite_repo=app.state.composite_scoring_repository,
     )
     app.state.history_service = AssessmentHistoryService(
         cs1_client=app.state.cs1_client,
         cs3_client=app.state.cs3_client,
+        snapshot_repo=app.state.assessment_snapshot_repository,
     )
     app.state.fund_air_calculator = FundAIRCalculator()
 
