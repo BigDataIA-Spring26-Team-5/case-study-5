@@ -277,7 +277,7 @@ with st.sidebar:
             st.error(st.session_state["bonus_roi_err"])
 
         # IC memo generation
-        if st.button("Generate IC Memo (.docx)", key="bonus_ic_memo_btn", use_container_width=True):
+        if st.button("Generate IC Memo (.pdf)", key="bonus_ic_memo_btn", use_container_width=True):
             try:
                 memo_resp = requests.post(
                     f"{BASE_URL}/api/v1/bonus/reports/ic-memo/{r['ticker']}",
@@ -290,7 +290,7 @@ with st.sidebar:
                     if "filename=" in fname:
                         st.session_state["bonus_ic_memo_name"] = fname.split("filename=", 1)[1].strip().strip('"')
                     else:
-                        st.session_state["bonus_ic_memo_name"] = f"ic_memo_{r['ticker']}.docx"
+                        st.session_state["bonus_ic_memo_name"] = f"ic_memo_{r['ticker']}.pdf"
                 else:
                     st.session_state["bonus_ic_memo_err"] = memo_resp.text[:200]
             except Exception as e:
@@ -300,15 +300,15 @@ with st.sidebar:
             st.download_button(
                 "Download IC Memo",
                 data=st.session_state["bonus_ic_memo_bytes"],
-                file_name=st.session_state.get("bonus_ic_memo_name", "ic_memo.docx"),
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                file_name=st.session_state.get("bonus_ic_memo_name", "ic_memo.pdf"),
+                mime="application/pdf",
                 use_container_width=True,
             )
         if st.session_state.get("bonus_ic_memo_err"):
             st.error(st.session_state["bonus_ic_memo_err"])
 
         # LP letter generation
-        if st.button("Generate LP Letter (.docx)", key="bonus_lp_btn", use_container_width=True):
+        if st.button("Generate LP Letter (.pdf)", key="bonus_lp_btn", use_container_width=True):
             try:
                 fid = reports_fund_id or "PE-FUND-I"
                 lp_resp = requests.post(
@@ -322,7 +322,7 @@ with st.sidebar:
                     if "filename=" in fname:
                         st.session_state["bonus_lp_name"] = fname.split("filename=", 1)[1].strip().strip('"')
                     else:
-                        st.session_state["bonus_lp_name"] = f"lp_letter_{fid}.docx"
+                        st.session_state["bonus_lp_name"] = f"lp_letter_{fid}.pdf"
                 else:
                     st.session_state["bonus_lp_err"] = lp_resp.text[:200]
             except Exception as e:
@@ -332,8 +332,8 @@ with st.sidebar:
             st.download_button(
                 "Download LP Letter",
                 data=st.session_state["bonus_lp_bytes"],
-                file_name=st.session_state.get("bonus_lp_name", "lp_letter.docx"),
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                file_name=st.session_state.get("bonus_lp_name", "lp_letter.pdf"),
+                mime="application/pdf",
                 use_container_width=True,
             )
         if st.session_state.get("bonus_lp_err"):
