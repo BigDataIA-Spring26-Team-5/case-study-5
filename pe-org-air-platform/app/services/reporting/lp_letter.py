@@ -1,9 +1,10 @@
 """LP Letter Generator — produces LP update letter summarizing Fund-AI-R metrics.
 
-Requires:  python-docx>=1.1.0  (add to requirements.txt)
+Requires:  weasyprint>=60.0
 """
 from __future__ import annotations
 
+import html as html_mod
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -43,17 +44,54 @@ The Investment Team
 {date}
 """
 
+LP_LETTER_CSS = """\
+body {
+    font-family: Georgia, 'Times New Roman', serif;
+    margin: 50px 60px;
+    font-size: 11pt;
+    color: #333;
+    line-height: 1.6;
+}
+h1 {
+    font-size: 18pt;
+    color: #1a365d;
+    border-bottom: 1px solid #1a365d;
+    padding-bottom: 6px;
+    margin-bottom: 20px;
+}
+h2 {
+    font-size: 13pt;
+    color: #2c5282;
+    margin-top: 24px;
+    margin-bottom: 8px;
+}
+hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 8px 0;
+}
+ul {
+    padding-left: 20px;
+}
+li {
+    margin: 4px 0;
+}
+p {
+    margin: 4px 0;
+}
+"""
+
 
 class LPLetterGenerator:
     """Generates LP update letters from Fund-AI-R metrics.
 
-    Falls back to plain-text if python-docx is not installed.
+    Falls back to plain-text if weasyprint is not installed.
     """
 
-    def _try_docx(self) -> Optional[Any]:
+    def _try_weasyprint(self) -> Optional[Any]:
         try:
-            from docx import Document  # type: ignore[import]
-            return Document
+            from weasyprint import HTML  # type: ignore[import]
+            return HTML
         except ImportError:
             return None
 
@@ -64,7 +102,7 @@ class LPLetterGenerator:
         company_scores: List[Dict[str, Any]],
         output_path: Optional[str] = None,
     ) -> str:
-        """Generate LP update letter and save as .docx (or .txt fallback).
+        """Generate LP update letter and save as .pdf (or .txt fallback).
 
         Args:
             fund_id: Fund identifier
@@ -109,30 +147,64 @@ class LPLetterGenerator:
             date=date_str,
         )
 
-        Document = self._try_docx()
-        path = output_path or f"lp_letter_{fund_id}_{datetime.now().strftime('%Y%m%d')}.docx"
+        HTML = self._try_weasyprint()
+        path = output_path or f"lp_letter_{fund_id}_{datetime.now().strftime('%Y%m%d')}.pdf"
 
-        if Document is None:
-            logger.warning("python-docx not installed — saving as .txt")
-            txt_path = path.replace(".docx", ".txt")
+        if HTML is None:
+            logger.warning("weasyprint not installed — saving as .txt")
+            txt_path = path.replace(".pdf", ".txt")
             with open(txt_path, "w") as f:
                 f.write(letter)
             logger.info("LP letter saved to %s", txt_path)
             return txt_path
 
-        doc = Document()
-        doc.add_heading(f"LP Update — {fund_id}", 0)
-        for line in letter.strip().split("\n"):
-            if line.startswith("---"):
-                doc.add_paragraph("─" * 40)
-            elif line.isupper() and len(line) > 5:
-                doc.add_heading(line.title(), level=2)
-            else:
-                doc.add_paragraph(line)
+        try:
+            body_parts = [f"<h1>LP Update &mdash; {html_mod.escape(fund_id)}</h1>"]
+            in_list = False
 
-        doc.save(path)
-        logger.info("LP letter saved to %s", path)
-        return path
+            for line in letter.strip().split("\n"):
+                stripped = line.strip()
+                is_bullet = stripped.startswith("\u2022") or stripped.startswith("  \u2022")
+
+                if is_bullet:
+                    if not in_list:
+                        body_parts.append("<ul>")
+                        in_list = True
+                    text = stripped.lstrip(" \u2022").strip()
+                    body_parts.append(f"<li>{html_mod.escape(text)}</li>")
+                else:
+                    if in_list:
+                        body_parts.append("</ul>")
+                        in_list = False
+
+                    if stripped.startswith("---"):
+                        body_parts.append("<hr>")
+                    elif stripped.isupper() and len(stripped) > 5:
+                        body_parts.append(f"<h2>{html_mod.escape(stripped.title())}</h2>")
+                    elif stripped == "":
+                        continue
+                    else:
+                        body_parts.append(f"<p>{html_mod.escape(stripped)}</p>")
+
+            if in_list:
+                body_parts.append("</ul>")
+
+            body_html = "\n".join(body_parts)
+            html_str = (
+                f'<!DOCTYPE html><html><head><meta charset="utf-8">'
+                f"<style>{LP_LETTER_CSS}</style></head>"
+                f"<body>{body_html}</body></html>"
+            )
+
+            HTML(string=html_str).write_pdf(path)
+            logger.info("LP letter saved to %s", path)
+            return path
+        except Exception as exc:
+            logger.exception("LP letter PDF generation failed; falling back to text: %s", exc)
+            txt_path = path.replace(".pdf", ".txt")
+            with open(txt_path, "w") as f:
+                f.write(letter)
+            return txt_path
 
 
 # Module-level singleton

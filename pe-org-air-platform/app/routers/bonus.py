@@ -3,8 +3,8 @@
 Implements the CS5 extensions section:
 - Mem0 semantic memory
 - Investment tracker with ROI
-- IC memo generator (Word doc)
-- LP letter generator (Word doc)
+- IC memo generator (PDF)
+- LP letter generator (PDF)
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ async def recall_memory(
     return payload
 
 
-@router.post("/reports/ic-memo/{ticker}", summary="Generate IC memo (.docx) for a company")
+@router.post("/reports/ic-memo/{ticker}", summary="Generate IC memo (.pdf) for a company")
 async def generate_ic_memo(
     ticker: str,
     target_org_air: float = Query(85.0, description="Target Org-AI-R for gap analysis / value creation"),
@@ -154,7 +154,7 @@ async def generate_ic_memo(
 
     out_path = os.path.join(
         _reports_subdir("ic_memo"),
-        f"ic_memo_{ticker_u}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.docx",
+        f"ic_memo_{ticker_u}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.pdf",
     )
     path = ic_memo_generator.generate(
         company_id=ticker_u,
@@ -171,7 +171,7 @@ async def generate_ic_memo(
     return FileResponse(path, filename=os.path.basename(path), background=background)
 
 
-@router.post("/reports/lp-letter/{fund_id}", summary="Generate LP letter (.docx) for a fund")
+@router.post("/reports/lp-letter/{fund_id}", summary="Generate LP letter (.pdf) for a fund")
 async def generate_lp_letter(
     fund_id: str,
     persist: bool = Query(
@@ -213,7 +213,7 @@ async def generate_lp_letter(
 
     out_path = os.path.join(
         _reports_subdir("lp_letter"),
-        f"lp_letter_{fund_id}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.docx",
+        f"lp_letter_{fund_id}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.pdf",
     )
     path = lp_letter_generator.generate(
         fund_id=fund_id,
