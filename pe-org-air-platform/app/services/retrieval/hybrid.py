@@ -38,8 +38,9 @@ except ImportError:
 try:
     from sentence_transformers import SentenceTransformer
     _ST_AVAILABLE = True
-except ImportError:
+except Exception:
     _ST_AVAILABLE = False
+    SentenceTransformer = None
 
 from app.services.search.vector_store import VectorStore, SearchResult
 

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
@@ -17,6 +17,7 @@ from app.routers.config import router as config_router
 
 # CS1 — Company Metadata
 from app.routers.companies import router as companies_router
+from app.routers.portfolios import router as portfolios_router
 
 # CS2 — Evidence Collection
 from app.routers.documents import router as documents_router
@@ -35,6 +36,8 @@ from app.routers.orgair_scoring import assessment_router
 # CS4 — RAG & Analyst Workflows
 from app.routers.rag import router as rag_router
 from app.routers.analyst_notes import router as analyst_notes_router
+from app.routers.bonus import router as bonus_router
+from app.routers.history import router as history_router
 
 # ── Framework imports ─────────────────────────────────────────────────────
 
@@ -257,6 +260,7 @@ app.include_router(config_router)
 
 # CS1 — Company Metadata
 app.include_router(companies_router)
+app.include_router(portfolios_router)
 
 # CS2 — Evidence Collection
 app.include_router(documents_router)
@@ -275,10 +279,15 @@ app.include_router(assessment_router)           # Read-only assessment results
 # CS4 — RAG & Analyst Workflows
 app.include_router(rag_router)
 app.include_router(analyst_notes_router)
+app.include_router(bonus_router)
+app.include_router(history_router)
 
 # CS5 — Agentic Due Diligence
-from app.routers.due_diligence import router as dd_router
-app.include_router(dd_router)
+try:
+    from app.routers.due_diligence import router as dd_router
+    app.include_router(dd_router)
+except ModuleNotFoundError:
+    logger.warning("langgraph_not_installed_skipping_cs5_dd_router")
 
 
 # ── Root Endpoint ─────────────────────────────────────────────────────────
@@ -291,6 +300,25 @@ async def root():
         "docs": {"swagger": "/docs", "redoc": "/redoc"},
         "status": "running",
     }
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus scrape endpoint for CS5 observability."""
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST  # type: ignore
+    except ModuleNotFoundError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error_code": "PROMETHEUS_NOT_INSTALLED",
+                "message": "prometheus_client is not installed in this environment.",
+                "details": "Install with `poetry add prometheus-client` (or ensure Poetry env is active).",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "correlation_id": get_correlation_id(),
+            },
+        )
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 if __name__ == "__main__":

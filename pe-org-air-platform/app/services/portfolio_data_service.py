@@ -90,6 +90,71 @@ class PortfolioDataService:
         self.scoring = composite_scoring_service or CompositeScoringService()
         self.ebitda_calculator = EBITDACalculator()
         self.gap_analyzer = GapAnalyzer()
+        self._company_repo = None
+        self._snapshot_repo = None
+        self._scoring_repo = None
+        self._composite_repo = None
+
+    # ------------------------------------------------------------------
+    # Internal helpers (lazy Snowflake-backed repos)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _looks_like_uuid(value: str) -> bool:
+        import re
+        return bool(
+            re.fullmatch(
+                r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}",
+                value or "",
+            )
+        )
+
+    def _get_company_repo(self):
+        if self._company_repo is None:
+            from app.repositories.company_repository import CompanyRepository
+            self._company_repo = CompanyRepository()
+        return self._company_repo
+
+    def _get_snapshot_repo(self):
+        if self._snapshot_repo is None:
+            from app.repositories.assessment_snapshot_repository import AssessmentSnapshotRepository
+            self._snapshot_repo = AssessmentSnapshotRepository()
+        return self._snapshot_repo
+
+    def _get_scoring_repo(self):
+        if self._scoring_repo is None:
+            from app.repositories.scoring_repository import ScoringRepository
+            self._scoring_repo = ScoringRepository()
+        return self._scoring_repo
+
+    def _get_composite_repo(self):
+        if self._composite_repo is None:
+            from app.repositories.composite_scoring_repository import CompositeScoringRepository
+            self._composite_repo = CompositeScoringRepository()
+        return self._composite_repo
+
+    def _resolve_portfolio_id(self, fund_id: str) -> Optional[str]:
+        """Resolve fund_id to a portfolio UUID, if present in CS1 portfolio tables."""
+        if not fund_id:
+            return None
+        if self._looks_like_uuid(fund_id):
+            return fund_id
+        try:
+            return self._get_company_repo().find_portfolio_id_by_name(fund_id)
+        except Exception:
+            return None
+
+    def _get_portfolio_company_rows(self, fund_id: str) -> tuple[Optional[str], List[Dict[str, Any]]]:
+        """Fetch portfolio companies from CS1 portfolio management; fall back to CS3_PORTFOLIO."""
+        portfolio_id = self._resolve_portfolio_id(fund_id)
+        if portfolio_id:
+            try:
+                rows = self._get_company_repo().get_by_portfolio(portfolio_id)
+                if rows:
+                    return portfolio_id, rows
+            except Exception:
+                pass
+        return None, [{"ticker": t} for t in CS3_PORTFOLIO]
 
     # ------------------------------------------------------------------
     # Company-level queries
@@ -212,17 +277,43 @@ class PortfolioDataService:
     ) -> Dict[str, Any]:
         """Run gap analysis for a company."""
         ticker = ticker.upper()
-        assessment = self.cs3.get_assessment(ticker)
 
-        if assessment:
-            dim_scores = {
-                _DIM_ALIAS_MAP.get(dim, dim): ds.score
-                for dim, ds in assessment.dimension_scores.items()
-            }
-            current_org_air = assessment.org_air_score
-        else:
+        # Avoid self-HTTP calls (CS3Client uses httpx to call this API), which can
+        # deadlock/time out when invoked inside the FastAPI process. Prefer
+        # reading from Snowflake repositories directly.
+        dim_scores: Dict[str, float] = {}
+        current_org_air = 0.0
+
+        try:
+            rows = self._get_scoring_repo().get_dimension_scores(ticker)
+            for row in rows or []:
+                dim = str(row.get("dimension") or "")
+                if not dim:
+                    continue
+                dim_scores[_DIM_ALIAS_MAP.get(dim, dim)] = float(row.get("score") or 0.0)
+        except Exception:
             dim_scores = {}
+
+        try:
+            row = self._get_composite_repo().fetch_orgair_row(ticker)
+            if row:
+                r = {k.lower(): v for k, v in row.items()}
+                current_org_air = float(r.get("org_air") or 0.0)
+        except Exception:
             current_org_air = 0.0
+
+        # Last-resort fallback (external/remote usage only).
+        if not dim_scores or current_org_air <= 0:
+            try:
+                assessment = self.cs3.get_assessment(ticker)
+                if assessment:
+                    dim_scores = {
+                        _DIM_ALIAS_MAP.get(dim, dim): ds.score
+                        for dim, ds in assessment.dimension_scores.items()
+                    }
+                    current_org_air = assessment.org_air_score
+            except Exception:
+                pass
 
         result = self.gap_analyzer.analyze(
             company_id=ticker,
@@ -236,20 +327,31 @@ class PortfolioDataService:
     # Portfolio-level queries
     # ------------------------------------------------------------------
 
-    async def _get_entry_score(self, company_id: str) -> float:
-        """Query entry Org-AI-R score for a company.
+    def _get_entry_score(self, ticker: str, portfolio_id: Optional[str]) -> float:
+        """Return the earliest recorded Org-AI-R score for this ticker.
 
         Stub — in production this would query the PORTFOLIO_POSITIONS table.
         Falls back to current score (delta_since_entry = 0).
         """
-        return 0.0
+        try:
+            entry = self._get_snapshot_repo().get_entry_org_air(
+                ticker=ticker,
+                portfolio_id=portfolio_id,
+            )
+            return float(entry) if entry is not None else 0.0
+        except Exception:
+            return 0.0
 
     def get_portfolio_view(self, fund_id: str = "PE-FUND-I") -> Dict[str, Any]:
         """Get aggregated portfolio view with all company scores."""
         companies: List[PortfolioCompanyView] = []
 
-        for ticker in CS3_PORTFOLIO:
-            assessment = self.cs3.get_assessment(ticker)
+        portfolio_id, company_rows = self._get_portfolio_company_rows(fund_id)
+
+        for row in company_rows:
+            ticker = str(row.get("ticker") or "").upper()
+            if not ticker:
+                continue
             dim_scores: Dict[str, float] = {}
             org_air = 0.0
             vr = 0.0
@@ -258,16 +360,41 @@ class PortfolioDataService:
             pf = 0.0
             ci = (0.0, 0.0)
 
-            if assessment:
-                org_air = assessment.org_air_score
-                vr = assessment.valuation_risk
-                hr = assessment.human_capital_risk
-                synergy = assessment.synergy
-                pf = assessment.position_factor
-                dim_scores = {
-                    dim: ds.score
-                    for dim, ds in assessment.dimension_scores.items()
-                }
+            # Prefer DB reads (no self-HTTP).
+            try:
+                org_row = self._get_composite_repo().fetch_orgair_row(ticker)
+                if org_row:
+                    r = {k.lower(): v for k, v in org_row.items()}
+                    org_air = float(r.get("org_air") or 0.0)
+                    vr = float(r.get("vr_score") or 0.0)
+                    hr = float(r.get("hr_score") or 0.0)
+                    synergy = float(r.get("synergy_score") or 0.0)
+                    pf = float(r.get("position_factor") or 0.0)
+                    ci = (float(r.get("ci_lower") or 0.0), float(r.get("ci_upper") or 0.0))
+            except Exception:
+                pass
+
+            try:
+                rows = self._get_scoring_repo().get_dimension_scores(ticker)
+                if rows:
+                    dim_scores = {str(d.get("dimension")): float(d.get("score") or 0.0) for d in rows if d.get("dimension")}
+            except Exception:
+                pass
+
+            # Last resort: CS3 client (external/remote usage only).
+            if org_air <= 0 or not dim_scores:
+                try:
+                    assessment = self.cs3.get_assessment(ticker)
+                    if assessment:
+                        org_air = org_air or assessment.org_air_score
+                        vr = vr or assessment.valuation_risk
+                        hr = hr or assessment.human_capital_risk
+                        synergy = synergy or assessment.synergy
+                        pf = pf or assessment.position_factor
+                        if not dim_scores:
+                            dim_scores = {dim: ds.score for dim, ds in assessment.dimension_scores.items()}
+                except Exception:
+                    pass
 
             # Evidence count from CS2
             evidence_count = 0
@@ -277,11 +404,27 @@ class PortfolioDataService:
             except Exception:
                 pass
 
+            entry_org_air = self._get_entry_score(ticker, portfolio_id) or org_air
+            if entry_org_air <= 0:
+                entry_org_air = org_air
+            delta_since_entry = (
+                round(org_air - entry_org_air, 2) if org_air and entry_org_air else 0.0
+            )
+
+            name = row.get("name") or COMPANY_NAMES.get(ticker, ticker)
+            sector = row.get("sector") or COMPANY_SECTORS.get(ticker, "")
+            market_cap_percentile = float(
+                row.get("market_cap_percentile")
+                or MARKET_CAP_PERCENTILES.get(ticker, 0.0)
+            )
+            revenue_millions = float(row.get("revenue_millions") or 0.0)
+            employee_count = int(row.get("employee_count") or 0)
+
             companies.append(PortfolioCompanyView(
-                company_id=ticker,
+                company_id=str(row.get("id") or ticker),
                 ticker=ticker,
-                name=COMPANY_NAMES.get(ticker, ticker),
-                sector=COMPANY_SECTORS.get(ticker, ""),
+                name=name,
+                sector=sector,
                 org_air=org_air,
                 vr_score=vr,
                 hr_score=hr,
@@ -289,8 +432,12 @@ class PortfolioDataService:
                 position_factor=pf,
                 dimension_scores=dim_scores,
                 confidence_interval=ci,
+                entry_org_air=entry_org_air,
+                delta_since_entry=delta_since_entry,
                 evidence_count=evidence_count,
-                market_cap_percentile=MARKET_CAP_PERCENTILES.get(ticker, 0.0),
+                market_cap_percentile=market_cap_percentile,
+                revenue_millions=revenue_millions,
+                employee_count=employee_count,
             ))
 
         # Portfolio aggregates
@@ -310,6 +457,19 @@ class PortfolioDataService:
             avg_hr=round(sum(hr_scores) / len(hr_scores), 2) if hr_scores else 0.0,
         )
         return portfolio.to_dict()
+
+    def get_portfolio_tickers(self, fund_id: str = "PE-FUND-I") -> List[str]:
+        """Return a ticker list for a fund/portfolio id.
+
+        Uses CS1 portfolio tables when available; falls back to CS3_PORTFOLIO.
+        """
+        _, company_rows = self._get_portfolio_company_rows(fund_id)
+        tickers: List[str] = []
+        for row in company_rows:
+            ticker = str(row.get("ticker") or "").upper()
+            if ticker:
+                tickers.append(ticker)
+        return tickers or list(CS3_PORTFOLIO)
 
 
 # Module-level singleton — set by lifespan.py at startup

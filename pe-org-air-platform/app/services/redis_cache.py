@@ -1,4 +1,7 @@
-import redis
+try:
+    import redis  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    redis = None
 from typing import Optional, TypeVar, Type
 from pydantic import BaseModel
 from app.core.settings import settings
@@ -8,6 +11,8 @@ T = TypeVar("T", bound=BaseModel)
 
 class RedisCache:
     def __init__(self):
+        if redis is None:
+            raise RuntimeError("redis package not installed")
         self.client = redis.from_url(
             settings.REDIS_URL,
             decode_responses=True,

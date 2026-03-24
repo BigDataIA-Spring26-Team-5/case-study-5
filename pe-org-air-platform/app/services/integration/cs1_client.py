@@ -88,3 +88,31 @@ class CS1Client(BaseAPIClient):
             employee_count=int(data.get("employee_count", 0)),
             fiscal_year_end=data.get("fiscal_year_end", ""),
         )
+
+    # -------------------------------------------------------------------------
+    # CS5 Portfolio support (CS1 portfolio management)
+    # -------------------------------------------------------------------------
+
+    async def get_portfolio(self, portfolio_id: str) -> Optional[Portfolio]:
+        """Fetch a single portfolio by ID."""
+        try:
+            data = await self.get(f"/portfolios/{portfolio_id}")
+        except NotFoundError:
+            return None
+        return Portfolio(
+            portfolio_id=str(data.get("id", portfolio_id)),
+            name=data.get("name", ""),
+            company_ids=list(data.get("company_ids") or []),
+            fund_vintage=int(data.get("fund_vintage") or 0),
+        )
+
+    async def resolve_portfolio_id(self, name: str) -> Optional[str]:
+        """Resolve a portfolio UUID by name (exact, case-insensitive match)."""
+        data = await self.get("/portfolios/resolve", params={"name": name})
+        return data.get("portfolio_id")
+
+    async def get_portfolio_companies(self, portfolio_id: str) -> List[Company]:
+        """Return companies belonging to a portfolio."""
+        data = await self.get(f"/portfolios/{portfolio_id}/companies")
+        items = data.get("items", []) if isinstance(data, dict) else []
+        return [self._parse_company(c) for c in items]

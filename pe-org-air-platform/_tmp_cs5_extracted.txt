@@ -1,0 +1,1836 @@
+
+
+--- page 1 ---
+Case Study 5
+Agentic Portfolio Intelligence
+“Claude, prepare the IC meeting for NVIDIA.”
+Labs 9-10 — Weeks 10-11 — MCP +LangGraph +CS1-CS4
+Course: Big Data and Intelligent Analytics
+Term: Spring 2026
+Designed by
+Sri Krishnamurthy, CFA
+sri@quantuniversity.com
+Copyright ©2025 QuantUniversity LLC. All Rights Reserved.
+Assigned: March 13, 2026
+Due: March 27, 2026 (3:59 PM)
+Version 4.0 — All technical review issues resolved
+MANDATORY: CS1-CS4 Integration Required
+This capstone case study requires working implementations from CS1, CS2, CS3,
+and CS4.
+You will wrap your CS1-CS4 APIs as MCP tools and orchestrate them with LangGraph
+agents :
+CS1: Company metadata, portfolio management →MCP Resources
+CS2: Evidence collection (SEC, jobs, patents) →MCP Tools
+CS3: Scoring engine (VR, HR, Org-AI-R) →MCP Tools
+CS4: RAG search, score justifications →MCP Tools + Agent Memory
+No mock data allowed. All agent tools must call your actual CS1-CS4 services.
+Submissions using hardcoded data will receive a maximum of 50% credit .
+
+--- page 2 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+“Show me the portfolio. Show me where to invest next.”
+This capstone transforms your CS1-CS4 platform into an intelligent agent system :
+MCP Server exposes your APIs as tools →LangGraph Agents orchestrate complex
+workflows
+Real Data — Real Agents — Real PE Workflows
+Weight 8% of final grade (100 base + 20 bonus points)
+Format Individual work
+Prerequisite Working CS1, CS2, CS3, CS4 implementations
+Lab 9 MCP Server, Resources, Prompts, History Tracking, Dashboard
+Lab 10 LangGraph Agents, Supervisor, HITL, Fund-AI-R, Metrics
+Copyright ©2025 QuantUniversity LLC 2
+
+--- page 3 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+Contents
+1 Platform Architecture 4
+1.1 CS1-CS4 →MCP Tool Mapping [v4 FIX] . . . . . . . . . . . . . . . . . . . . . . . . . 4
+1.2 Required CS Client Interfaces [v4 FIX] . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+I Lab 9: MCP Server + Integration 6
+2 Lab 9 Preamble 6
+2.1 Learning Objectives . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+2.2 Tools Introduced . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+3 Task 9.1: Portfolio Data Service (8 pts) [REQUIRED] 7
+4 Task 9.2: MCP Server Core (12 pts) [MCP] 9
+5 Task 9.3: MCP Resources & Prompts (8 pts) [MCP] 13
+6 Task 9.4: Assessment History Tracking (6 pts) [NEW] 14
+7 Task 9.5: Evidence Display Component (6 pts) [NEW] 17
+8 Task 9.6: Portfolio Dashboard (10 pts) [REQUIRED] 20
+II Lab 10: LangGraph Agents + PE Workflows 22
+9 Lab 10 Preamble 22
+9.1 Learning Objectives [v4 FIX] . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 22
+10 Task 10.1: LangGraph State Definitions (8 pts) [AGENT] 22
+11 Task 10.2: Specialist Agents (12 pts) [AGENT] 24
+12 Task 10.3: Supervisor with HITL (10 pts) [AGENT] 27
+13 Task 10.4: Agentic Due Diligence Workflow (10 pts) [AGENT] 29
+14 Task 10.5: Fund-AI-R Calculator (5 pts) [NEW] 30
+15 Task 10.6: Prometheus Metrics (5 pts) [NEW] 32
+16 Common Mistakes & Troubleshooting [v4 FIX] 34
+17 Testing Your Implementation [v4 FIX] 34
+18 Evaluation Criteria 36
+19 Submission 37
+Copyright ©2025 QuantUniversity LLC 3
+
+--- page 4 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+1 Platform Architecture
+Building on CS1-CS4
+The Agentic Platform — Your CS1-CS4 Work Powers Intelligent Agents
+ORCHESTRATION LAYER (Lab 10)
+Supervisor SEC Agent Talent Agent Score Agent Evidence Agent HITL
+MCP SERVER (Lab 9) — Tools — Resources — Prompts
+INTEGRATION LAYER — Portfolio Data Service — History Tracking — Metrics
+YOUR CS1-CS4 IMPLEMENTATIONSCS1
+PlatformCS2
+EvidenceCS3
+ScoringCS4
+RAG
+1.1 CS1-CS4 →MCP Tool Mapping [v4 FIX]
+MCP Tool CS API Endpoint Client Method Notes
+calculate orgairscore CS3 GET /v2/assessments/ {id} cs3.get assessment() Returns CompanyAssess-
+ment
+getcompany evidence CS2 GET /v1/evidence/ {id} cs2.get evidence() Filters by dimension
+generate justification CS4 POST /v1/justifications cs4.generate justification() Requires RAG search
+project ebitda impact CS3 (Local calculation) ebitda calculator.project() Uses v2.0 params
+rungapanalysis CS3+CS4 POST /v1/gap-analysis gapanalyzer.analyze() Scoring + initiatives
+getportfolio summary CS1 GET /v1/portfolios/ {id} cs1.get portfolio companies() Returns List[Company]
+1.2 Required CS Client Interfaces [v4 FIX]
+Your CS1-CS4 implementations must expose these interfaces for CS5 integration:
+services/cs1 client.py — Required from CS1
+1"""CS1 Client Interface - Students built this in Case Study 1."""
+2from dataclasses import dataclass
+3from enum import Enum
+4from typing import List, Optional
+5
+6class Sector(Enum):
+7 TECHNOLOGY = "technology"
+8 HEALTHCARE = "healthcare"
+9 FINANCIAL_SERVICES = "financial_services"
+10 MANUFACTURING = "manufacturing"
+11 RETAIL = "retail"
+12 ENERGY = "energy"
+13
+14@dataclass
+15class Company:
+16 company_id: str
+17 ticker: str
+18 name: str
+19 sector: Sector
+20 employee_count: int
+Copyright ©2025 QuantUniversity LLC 4
+
+--- page 5 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+21 revenue_mm: float
+22 portfolio_entry_date: Optional[str] = None
+23
+24class CS1Client:
+25 """Client for CS1 Platform APIs."""
+26
+27 def __init__(self, base_url: str = "http://localhost:8000"):
+28 self.base_url = base_url
+29
+30 async def get_company(self, company_id: str) -> Company:
+31 """GET /v1/companies/{company_id}"""
+32 ...
+33
+34 async def get_portfolio_companies(self, fund_id: str) -> List[Company]:
+35 """GET /v1/portfolios/{fund_id}/companies"""
+36 ...
+services/cs3 client.py — Required from CS3
+1"""CS3 Client Interface - Students built this in Case Study 3."""
+2from dataclasses import dataclass
+3from enum import Enum
+4from typing import Dict, Tuple
+5
+6class Dimension(Enum):
+7 DATA_INFRASTRUCTURE = "data_infrastructure"
+8 AI_GOVERNANCE = "ai_governance"
+9 TECHNOLOGY_STACK = "technology_stack"
+10 TALENT = "talent"
+11 LEADERSHIP = "leadership"
+12 USE_CASE_PORTFOLIO = "use_case_portfolio"
+13 CULTURE = "culture"
+14
+15@dataclass
+16class DimensionScore:
+17 dimension: Dimension
+18 score: float
+19 level: int
+20 evidence_count: int
+21
+22@dataclass
+23class CompanyAssessment:
+24 company_id: str
+25 org_air_score: float
+26 vr_score: float
+27 hr_score: float
+28 synergy_score: float
+29 dimension_scores: Dict[Dimension, DimensionScore]
+30 confidence_interval: Tuple[float, float]
+31 evidence_count: int
+32
+33class CS3Client:
+34 """Client for CS3 Scoring APIs."""
+35
+36 async def get_assessment(self, company_id: str) -> CompanyAssessment:
+37 """GET /v2/assessments/{company_id}"""
+38 ...
+Copyright ©2025 QuantUniversity LLC 5
+
+--- page 6 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+Part I
+Lab 9: MCP Server + Integration
+2 Lab 9 Preamble
+Date March 13, 2026 (Thursday)
+Focus MCP Server, CS1-CS4 Integration, History Tracking, Dashboard
+Time Estimate Lecture: 2 hrs — Lab: 10 hrs — Challenge: +4 hrs
+2.1 Learning Objectives
+Learning Objectives
+Bloom’s Level Objective
+Remember List the three MCP primitives: Tools, Resources, Prompts
+Understand Explain how MCP enables universal agent interoperability
+Apply Wrap CS1-CS4 APIs as MCP tools
+Analyze Compare MCP transport layers (stdio, SSE)
+Evaluate Assess tool schema design for agent usability
+Create Build a complete MCP server exposing your platform
+2.2 Tools Introduced
+Tools Introduced
+Tool Purpose Why This Tool
+MCP SDK Model Context Protocol Standard for agent-tool interoperability
+Claude Desktop MCP client Test tools with Claude directly
+Streamlit Dashboard framework Python-native, hot reload
+nest asyncio Async compatibility [v4 FIX] Required for Streamlit async
+Your CS1-CS4 Data sources REQUIRED — no mock data
+Copyright ©2025 QuantUniversity LLC 6
+
+--- page 7 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+3 Task 9.1: Portfolio Data Service (8 pts) [REQUIRED]
+Building on CS1-CS4
+This service is the integration layer between your CS1-CS4 APIs and the MCP server. It
+provides a unified interface for accessing all platform data.
+services/integration/portfolio data service.py
+1"""
+2Unified Portfolio Data Service - Integrates CS1, CS2, CS3, CS4.
+3
+4This is the ONLY way to get data for agents and dashboards.
+5ALL data comes from YOUR CS1-CS4 implementations.
+6"""
+7from typing import List, Dict, Optional
+8from dataclasses import dataclass
+9from datetime import datetime
+10from decimal import Decimal
+11import structlog
+12
+13# Import YOUR CS1-CS4 clients (these must exist from previous case studies)
+14from services.cs1_client import CS1Client, Company, Sector
+15from services.cs2_client import CS2Client, Evidence
+16from services.cs3_client import CS3Client, CompanyAssessment, Dimension
+17from services.cs4_client import CS4Client, ScoreJustification
+18
+19logger = structlog.get_logger()
+20
+21@dataclass
+22class PortfolioCompanyView:
+23 """Complete view of a portfolio company from CS1-CS4."""
+24 company_id: str
+25 ticker: str
+26 name: str
+27 sector: str
+28 org_air: float
+29 vr_score: float
+30 hr_score: float
+31 synergy_score: float
+32 dimension_scores: Dict[str, float]
+33 confidence_interval: tuple
+34 entry_org_air: float
+35 delta_since_entry: float
+36 evidence_count: int
+37
+38class PortfolioDataService:
+39 """Unified data service integrating CS1-CS4."""
+40
+41 def __init__(
+42 self,
+43 cs1_url: str = "http://localhost:8000",
+44 cs2_url: str = "http://localhost:8001",
+45 cs3_url: str = "http://localhost:8002",
+46 ):
+47 # Initialize all CS clients at construction time
+48 self.cs1 = CS1Client(base_url=cs1_url)
+49 self.cs2 = CS2Client(base_url=cs2_url)
+50 self.cs3 = CS3Client(base_url=cs3_url)
+51 self.cs4 = CS4Client()
+52 logger.info("portfolio_data_service_initialized")
+53
+54 async def get_portfolio_view(
+55 self,
+56 fund_id: str,
+57 ) -> List[PortfolioCompanyView]:
+58 """Load portfolio from CS1, scores from CS3, evidence from CS2."""
+Copyright ©2025 QuantUniversity LLC 7
+
+--- page 8 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+59 # Call YOUR CS1 API
+60 companies = await self.cs1.get_portfolio_companies(fund_id)
+61
+62 views = []
+63 for company in companies:
+64 # Call YOUR CS3 API
+65 assessment = await self.cs3.get_assessment(company.ticker)
+66 # Call YOUR CS2 API
+67 evidence = await self.cs2.get_evidence(company.ticker)
+68
+69 entry_score = await self._get_entry_score(company.company_id)
+70
+71 views.append(PortfolioCompanyView(
+72 company_id=company.company_id,
+73 ticker=company.ticker,
+74 name=company.name,
+75 sector=company.sector.value,
+76 org_air=assessment.org_air_score,
+77 vr_score=assessment.vr_score,
+78 hr_score=assessment.hr_score,
+79 synergy_score=assessment.synergy_score,
+80 dimension_scores={
+81 d.value: s.score
+82 for d, s in assessment.dimension_scores.items()
+83 },
+84 confidence_interval=assessment.confidence_interval,
+85 entry_org_air=entry_score,
+86 delta_since_entry=assessment.org_air_score - entry_score,
+87 evidence_count=len(evidence),
+88 ))
+89
+90 return views
+91
+92 async def _get_entry_score(self, company_id: str) -> float:
+93 """Get entry score from CS1 portfolio tracking."""
+94 # In production, query CS1’s portfolio_positions table
+95 return 45.0 # Placeholder
+96
+97# Singleton instance
+98portfolio_data_service = PortfolioDataService()
+Copyright ©2025 QuantUniversity LLC 8
+
+--- page 9 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+4 Task 9.2: MCP Server Core (12 pts) [MCP]
+MCP Server:
+Wrap CS1-CS4 as MCP Tools This is the key integration point. Your MCP server exposes
+CS1-CS4 capabilities as tools that any LLM agent can invoke.
+mcp/server.py — MCP Server wrapping CS1-CS4 [v4 FIX]
+1"""
+2PE Org-AI-R MCP Server - Universal agent interoperability.
+3
+4This server exposes YOUR CS1-CS4 APIs as MCP tools.
+5Claude, GPT-4, or any MCP client can use your platform.
+6
+7v4 FIX: All clients initialized at module level
+8"""
+9from typing import List, Dict, Any
+10from datetime import datetime # v4 FIX: Import datetime
+11import json
+12from mcp.server import Server
+13from mcp.server.stdio import stdio_server
+14from mcp.types import (
+15 Tool, Resource, Prompt, PromptMessage,
+16 TextContent, ToolResult,
+17)
+18import structlog
+19
+20# v4 FIX: Import ALL clients at module level (not inside functions)
+21from services.integration.portfolio_data_service import portfolio_data_service
+22from services.cs2_client import CS2Client
+23from services.cs3_client import CS3Client
+24from services.cs4_client import CS4Client
+25from services.value_creation.ebitda import ebitda_calculator
+26from services.value_creation.gap_analysis import gap_analyzer
+27
+28logger = structlog.get_logger()
+29
+30# v4 FIX: Initialize ALL clients at module level
+31mcp_server = Server("pe-orgair-server")
+32cs2_client = CS2Client()
+33cs3_client = CS3Client()
+34cs4_client = CS4Client()
+35
+36# ============================================
+37# TOOLS - Executable functions
+38# ============================================
+39@mcp_server.list_tools()
+40async def list_tools() -> List[Tool]:
+41 """List all available tools."""
+42 return [
+43 Tool(
+44 name="calculate_org_air_score",
+45 description= """Calculate Org-AI-R score for a company using CS3 scoring engine.
+46Returns: Final score, V^R, H^R, synergy, confidence interval, dimension breakdown.""" ,
+47 inputSchema={
+48 "type": "object",
+49 "properties": {
+50 "company_id": {"type": "string", "description": "Company ticker (e.g., ’NVDA’)"},
+51 },
+52 "required": ["company_id"],
+53 },
+54 ),
+55 Tool(
+56 name="get_company_evidence",
+57 description= """Retrieve AI-readiness evidence for a company using CS2.
+58Returns: Evidence items with source type, content, confidence.""" ,
+59 inputSchema={
+Copyright ©2025 QuantUniversity LLC 9
+
+--- page 10 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+60 "type": "object",
+61 "properties": {
+62 "company_id": {"type": "string"},
+63 "dimension": {
+64 "type": "string",
+65 "enum": ["data_infrastructure", "ai_governance",
+66 "technology_stack", "talent", "leadership",
+67 "use_case_portfolio", "culture", "all"],
+68 "default": "all",
+69 },
+70 "limit": {"type": "integer", "default": 10},
+71 },
+72 "required": ["company_id"],
+73 },
+74 ),
+75 Tool(
+76 name="generate_justification",
+77 description= """Generate evidence-backed justification using CS4 RAG.
+78Returns: Score, level, rubric match, supporting evidence with citations.""" ,
+79 inputSchema={
+80 "type": "object",
+81 "properties": {
+82 "company_id": {"type": "string"},
+83 "dimension": {
+84 "type": "string",
+85 "enum": ["data_infrastructure", "ai_governance",
+86 "technology_stack", "talent", "leadership",
+87 "use_case_portfolio", "culture"],
+88 },
+89 },
+90 "required": ["company_id", "dimension"],
+91 },
+92 ),
+93 Tool(
+94 name="project_ebitda_impact",
+95 description= """Project EBITDA impact from AI improvements using v2.0 model.
+96Returns: Conservative, base, optimistic scenarios with risk adjustment.""" ,
+97 inputSchema={
+98 "type": "object",
+99 "properties": {
+100 "company_id": {"type": "string"},
+101 "entry_score": {"type": "number", "minimum": 0, "maximum": 100},
+102 "target_score": {"type": "number", "minimum": 0, "maximum": 100},
+103 "h_r_score": {"type": "number", "minimum": 0, "maximum": 100},
+104 },
+105 "required": ["company_id", "entry_score", "target_score", "h_r_score"],
+106 },
+107 ),
+108 Tool(
+109 name="run_gap_analysis",
+110 description= """Analyze gaps and generate 100-day improvement plan.
+111 Returns: Gap by dimension, priority ranking, initiatives, investment estimate.""" ,
+112 inputSchema={
+113 "type": "object",
+114 "properties": {
+115 "company_id": {"type": "string"},
+116 "target_org_air": {"type": "number", "minimum": 0, "maximum": 100},
+117 },
+118 "required": ["company_id", "target_org_air"],
+119 },
+120 ),
+121 Tool(
+122 name="get_portfolio_summary",
+123 description= """Get fund portfolio summary with Fund-AI-R.
+124 Returns: Fund-AI-R, company breakdown, concentration metrics.""" ,
+125 inputSchema={
+126 "type": "object",
+127 "properties": {
+128 "fund_id": {"type": "string"},
+129 },
+Copyright ©2025 QuantUniversity LLC 10
+
+--- page 11 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+130 "required": ["fund_id"],
+131 },
+132 ),
+133 ]
+134
+135 @mcp_server.call_tool()
+136 async def call_tool(name: str, arguments: dict) -> List[TextContent]:
+137 """Route tool calls to CS1-CS4 APIs."""
+138 logger.info("mcp_tool_call", tool=name, args=arguments)
+139
+140 try:
+141 if name == "calculate_org_air_score":
+142 # Call YOUR CS3 scoring engine (module-level client)
+143 assessment = await cs3_client.get_assessment(arguments["company_id"])
+144 return [TextContent(text=json.dumps({
+145 "company_id": arguments["company_id"],
+146 "org_air": assessment.org_air_score,
+147 "vr_score": assessment.vr_score,
+148 "hr_score": assessment.hr_score,
+149 "synergy_score": assessment.synergy_score,
+150 "confidence_interval": list(assessment.confidence_interval),
+151 "dimension_scores": {
+152 d.value: s.score
+153 for d, s in assessment.dimension_scores.items()
+154 },
+155 }, indent=2))]
+156
+157 elif name == "get_company_evidence":
+158 # v4 FIX: Use module-level client
+159 evidence = await cs2_client.get_evidence(
+160 company_id=arguments["company_id"],
+161 dimension=arguments.get("dimension", "all"),
+162 limit=arguments.get("limit", 10),
+163 )
+164 return [TextContent(text=json.dumps([
+165 {
+166 "source_type": e.source_type.value,
+167 "content": e.content[:500],
+168 "confidence": e.confidence,
+169 "signal_category": e.signal_category,
+170 }
+171 for e in evidence
+172 ], indent=2))]
+173
+174 elif name == "generate_justification":
+175 from services.cs3_client import Dimension
+176 justification = await cs4_client.generate_justification(
+177 company_id=arguments["company_id"],
+178 dimension=Dimension(arguments["dimension"]),
+179 )
+180 return [TextContent(text=json.dumps({
+181 "dimension": arguments["dimension"],
+182 "score": justification.score,
+183 "level": justification.level,
+184 "level_name": justification.level_name,
+185 "evidence_strength": justification.evidence_strength,
+186 "rubric_criteria": justification.rubric_criteria,
+187 "supporting_evidence": [
+188 {"source_type": e.source_type, "content": e.content[:300], "confidence": e.confidence}
+189 for e in justification.supporting_evidence[:5]
+190 ],
+191 "gaps_identified": justification.gaps_identified,
+192 }, indent=2))]
+193
+194 elif name == "project_ebitda_impact":
+195 projection = ebitda_calculator.project(
+196 company_id=arguments["company_id"],
+197 entry_score=arguments["entry_score"],
+198 exit_score=arguments["target_score"],
+199 h_r_score=arguments["h_r_score"],
+Copyright ©2025 QuantUniversity LLC 11
+
+--- page 12 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+200 )
+201 return [TextContent(text=json.dumps({
+202 "delta_air": float(projection.delta_air),
+203 "scenarios": {
+204 "conservative": f"{projection.conservative_pct:.2f}%",
+205 "base": f"{projection.base_pct:.2f}%",
+206 "optimistic": f"{projection.optimistic_pct:.2f}%",
+207 },
+208 "risk_adjusted": f"{projection.risk_adjusted_pct:.2f}%",
+209 "requires_approval": projection.requires_approval,
+210 }, indent=2))]
+211
+212 elif name == "run_gap_analysis":
+213 assessment = await cs3_client.get_assessment(arguments["company_id"])
+214 current_scores = {d.value: s.score for d, s in assessment.dimension_scores.items()}
+215 analysis = gap_analyzer.analyze(
+216 company_id=arguments["company_id"],
+217 current_scores=current_scores,
+218 target_org_air=arguments["target_org_air"],
+219 )
+220 return [TextContent(text=json.dumps(analysis, indent=2))]
+221
+222 elif name == "get_portfolio_summary":
+223 portfolio = await portfolio_data_service.get_portfolio_view(arguments["fund_id"])
+224 fund_air = sum(c.org_air for c in portfolio) / len(portfolio) if portfolio else 0
+225 return [TextContent(text=json.dumps({
+226 "fund_id": arguments["fund_id"],
+227 "fund_air": round(fund_air, 1),
+228 "company_count": len(portfolio),
+229 "companies": [{"ticker": c.ticker, "org_air": c.org_air, "sector": c.sector} for c in portfolio],
+230 }, indent=2))]
+231
+232 else:
+233 return [TextContent(text=f"Unknown tool: {name}")]
+234
+235 except Exception as e:
+236 logger.error("tool_error", tool=name, error=str(e))
+237 return [TextContent(text=f"Error: {str(e)}")]
+238
+239 # Main entry point
+240 async def main():
+241 async with stdio_server() as (read_stream, write_stream):
+242 await mcp_server.run(read_stream, write_stream, mcp_server.create_initialization_options())
+243
+244 if __name__ == "__main__":
+245 import asyncio
+246 asyncio.run(main())
+Copyright ©2025 QuantUniversity LLC 12
+
+--- page 13 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+5 Task 9.3: MCP Resources & Prompts (8 pts) [MCP]
+mcp/server.py (continued) — Resources & Prompts
+1# ============================================
+2# RESOURCES - Addressable data
+3# ============================================
+4@mcp_server.list_resources()
+5async def list_resources() -> List[Resource]:
+6 return [
+7 Resource(
+8 uri="orgair://parameters/v2.0",
+9 name="Org-AI-R Scoring Parameters v2.0",
+10 description="Current scoring parameters: alpha, beta, gamma values",
+11 ),
+12 Resource(
+13 uri="orgair://sectors",
+14 name="Sector Definitions",
+15 description="Sector baselines and weights",
+16 ),
+17 ]
+18
+19@mcp_server.read_resource()
+20async def read_resource(uri: str) -> str:
+21 if uri == "orgair://parameters/v2.0":
+22 return json.dumps({
+23 "version": "2.0",
+24 "alpha": 0.60, "beta": 0.12,
+25 "gamma_0": 0.0025, "gamma_1": 0.05, "gamma_2": 0.025, "gamma_3": 0.01,
+26 })
+27 elif uri == "orgair://sectors":
+28 return json.dumps({
+29 "technology": {"h_r_base": 85, "weight_talent": 0.18},
+30 "healthcare": {"h_r_base": 75, "weight_governance": 0.18},
+31 })
+32 return "{}"
+33
+34# ============================================
+35# PROMPTS - Reusable templates
+36# ============================================
+37@mcp_server.list_prompts()
+38async def list_prompts() -> List[Prompt]:
+39 return [
+40 Prompt(
+41 name="due_diligence_assessment",
+42 description="Complete due diligence assessment for a company",
+43 arguments=[{"name": "company_id", "required": True}],
+44 ),
+45 Prompt(
+46 name="ic_meeting_prep",
+47 description="Prepare Investment Committee meeting package",
+48 arguments=[{"name": "company_id", "required": True}],
+49 ),
+50 ]
+51
+52@mcp_server.get_prompt()
+53async def get_prompt(name: str, arguments: dict) -> List[PromptMessage]:
+54 if name == "due_diligence_assessment":
+55 return [PromptMessage(
+56 role="user",
+57 content=TextContent(text=f """Perform due diligence for {arguments[’company_id’]}.
+581. Calculate Org-AI-R score using calculate_org_air_score
+592. For dimensions below 60, use generate_justification
+603. Run gap_analysis with target_org_air=75
+614. Project EBITDA impact""" ),
+62 )]
+63 return []
+Copyright ©2025 QuantUniversity LLC 13
+
+--- page 14 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+6 Task 9.4: Assessment History Tracking (6 pts) [NEW]
+Building on CS1-CS4
+This task tracks assessment history over time, enabling trend analysis and delta calculations.
+Uses CS1 for storage and CS3 for current scores.
+services/tracking/assessment history.py [NEW]
+1"""Assessment History Tracking - Stores score history for trend analysis."""
+2from dataclasses import dataclass
+3from datetime import datetime, timedelta
+4from typing import List, Dict, Optional
+5from decimal import Decimal
+6import structlog
+7
+8from services.cs1_client import CS1Client
+9from services.cs3_client import CS3Client, CompanyAssessment
+10
+11logger = structlog.get_logger()
+12
+13@dataclass
+14class AssessmentSnapshot:
+15 """Single point-in-time assessment."""
+16 company_id: str
+17 timestamp: datetime
+18 org_air: Decimal
+19 vr_score: Decimal
+20 hr_score: Decimal
+21 synergy_score: Decimal
+22 dimension_scores: Dict[str, Decimal]
+23 confidence_interval: tuple
+24 evidence_count: int
+25 assessor_id: str
+26 assessment_type: str # "screening", "limited", "full"
+27
+28@dataclass
+29class AssessmentTrend:
+30 """Trend analysis for a company."""
+31 company_id: str
+32 current_org_air: float
+33 entry_org_air: float
+34 delta_since_entry: float
+35 delta_30d: Optional[float]
+36 delta_90d: Optional[float]
+37 trend_direction: str # "improving", "stable", "declining"
+38 snapshot_count: int
+39
+40class AssessmentHistoryService:
+41 """
+42 Tracks assessment history using CS1 for storage, CS3 for calculations.
+43
+44 Students must implement:
+45 1. record_assessment() - Store new assessment snapshot
+46 2. get_history() - Retrieve snapshots for a company
+47 3. calculate_trend() - Compute trend metrics
+48 """
+49
+50 def __init__(self, cs1_client: CS1Client, cs3_client: CS3Client):
+51 self.cs1 = cs1_client
+52 self.cs3 = cs3_client
+53 self._cache: Dict[str, List[AssessmentSnapshot]] = {}
+54
+55 async def record_assessment(
+56 self,
+57 company_id: str,
+58 assessor_id: str,
+Copyright ©2025 QuantUniversity LLC 14
+
+--- page 15 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+59 assessment_type: str = "full",
+60 ) -> AssessmentSnapshot:
+61 """
+62 Record current assessment as a snapshot.
+63
+64 Flow:
+65 1. Call CS3 get_assessment() for current scores
+66 2. Create snapshot with timestamp
+67 3. Store in history (via CS1/Snowflake)
+68 4. Return snapshot
+69 """
+70 # Get current assessment from YOUR CS3
+71 assessment = await self.cs3.get_assessment(company_id)
+72
+73 snapshot = AssessmentSnapshot(
+74 company_id=company_id,
+75 timestamp=datetime.utcnow(),
+76 org_air=Decimal(str(assessment.org_air_score)),
+77 vr_score=Decimal(str(assessment.vr_score)),
+78 hr_score=Decimal(str(assessment.hr_score)),
+79 synergy_score=Decimal(str(assessment.synergy_score)),
+80 dimension_scores={
+81 d.value: Decimal(str(s.score))
+82 for d, s in assessment.dimension_scores.items()
+83 },
+84 confidence_interval=assessment.confidence_interval,
+85 evidence_count=assessment.evidence_count,
+86 assessor_id=assessor_id,
+87 assessment_type=assessment_type,
+88 )
+89
+90 # Store via CS1 (Snowflake)
+91 await self._store_snapshot(snapshot)
+92
+93 # Update cache
+94 if company_id not in self._cache:
+95 self._cache[company_id] = []
+96 self._cache[company_id].append(snapshot)
+97
+98 logger.info("assessment_recorded",
+99 company_id=company_id,
+100 org_air=float(snapshot.org_air))
+101 return snapshot
+102
+103 async def _store_snapshot(self, snapshot: AssessmentSnapshot) -> None:
+104 """Store snapshot in Snowflake via CS1."""
+105 # In production: INSERT INTO assessment_history ...
+106 pass
+107
+108 async def get_history(
+109 self,
+110 company_id: str,
+111 days: int = 365,
+112 ) -> List[AssessmentSnapshot]:
+113 """Retrieve assessment history from CS1/Snowflake."""
+114 # Check cache first
+115 if company_id in self._cache:
+116 cutoff = datetime.utcnow() - timedelta(days=days)
+117 return [s for s in self._cache[company_id] if s.timestamp >= cutoff]
+118
+119 # Query CS1/Snowflake
+120 # SELECT * FROM assessment_history WHERE company_id = ? AND timestamp >= ?
+121 return []
+122
+123 async def calculate_trend(self, company_id: str) -> AssessmentTrend:
+124 """Calculate trend metrics from history."""
+125 history = await self.get_history(company_id, days=365)
+126
+127 if not history:
+128 # No history, get current assessment
+Copyright ©2025 QuantUniversity LLC 15
+
+--- page 16 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+129 current = await self.cs3.get_assessment(company_id)
+130 return AssessmentTrend(
+131 company_id=company_id,
+132 current_org_air=current.org_air_score,
+133 entry_org_air=current.org_air_score,
+134 delta_since_entry=0.0,
+135 delta_30d=None,
+136 delta_90d=None,
+137 trend_direction="stable",
+138 snapshot_count=0,
+139 )
+140
+141 # Sort by timestamp
+142 history.sort(key=lambda s: s.timestamp)
+143
+144 current = float(history[-1].org_air)
+145 entry = float(history[0].org_air)
+146
+147 # Calculate deltas
+148 now = datetime.utcnow()
+149 delta_30d = None
+150 delta_90d = None
+151
+152 for snapshot in reversed(history):
+153 age_days = (now - snapshot.timestamp).days
+154 if age_days >= 30 and delta_30d is None:
+155 delta_30d = current - float(snapshot.org_air)
+156 if age_days >= 90 and delta_90d is None:
+157 delta_90d = current - float(snapshot.org_air)
+158 break
+159
+160 # Determine trend direction
+161 delta = current - entry
+162 if delta > 5:
+163 direction = "improving"
+164 elif delta < -5:
+165 direction = "declining"
+166 else:
+167 direction = "stable"
+168
+169 return AssessmentTrend(
+170 company_id=company_id,
+171 current_org_air=current,
+172 entry_org_air=entry,
+173 delta_since_entry=round(delta, 1),
+174 delta_30d=round(delta_30d, 1) if delta_30d else None,
+175 delta_90d=round(delta_90d, 1) if delta_90d else None,
+176 trend_direction=direction,
+177 snapshot_count=len(history),
+178 )
+179
+180 # Factory function
+181 def create_history_service(cs1: CS1Client, cs3: CS3Client) -> AssessmentHistoryService:
+182 return AssessmentHistoryService(cs1, cs3)
+Copyright ©2025 QuantUniversity LLC 16
+
+--- page 17 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+7 Task 9.5: Evidence Display Component (6 pts) [NEW]
+Streamlit:
+Visualize CS4 Justifications This Streamlit component displays evidence-backed justifications
+from CS4 RAG.
+dashboard/components/evidence display.py [NEW]
+1"""Evidence Display Component - Streamlit component for CS4 justifications."""
+2import streamlit as st
+3from typing import Dict, List
+4
+5from services.cs4_client import ScoreJustification
+6
+7# Color coding by level
+8LEVEL_COLORS = {
+9 1: "#ef4444", # red - Nascent
+10 2: "#f97316", # orange - Developing
+11 3: "#eab308", # yellow - Adequate
+12 4: "#22c55e", # green - Good
+13 5: "#14b8a6", # teal - Excellent
+14}
+15
+16LEVEL_NAMES = {
+17 1: "Nascent", 2: "Developing", 3: "Adequate", 4: "Good", 5: "Excellent"
+18}
+19
+20def render_evidence_card(justification: ScoreJustification) -> None:
+21 """
+22 Render a single dimension’s evidence card.
+23
+24 Shows:
+25 - Score badge with color coding (L1-L5)
+26 - Evidence list with source citations
+27 - Gaps identified section
+28 - Confidence indicator
+29 """
+30 color = LEVEL_COLORS.get(justification.level, "#6b7280")
+31 level_name = LEVEL_NAMES.get(justification.level, "Unknown")
+32
+33 with st.container():
+34 # Header with score badge
+35 col1, col2, col3 = st.columns([4, 1, 1])
+36
+37 with col1:
+38 st.markdown(f"### {justification.dimension.replace(’_’, ’ ’).title()}")
+39
+40 with col2:
+41 st.markdown(
+42 f’<span style="background-color:{color};color:white;padding:4px 12px;’
+43 f’border-radius:12px;font-weight:bold;">L{justification.level}</span>’,
+44 unsafe_allow_html=True
+45 )
+46
+47 with col3:
+48 st.markdown(f"**{justification.score:.1f}**")
+49
+50 # Evidence strength indicator
+51 strength_colors = {"strong": "#22c55e", "moderate": "#eab308", "weak": "#ef4444"}
+52 st.markdown(
+53 f"Evidence: <span style=’color:{strength_colors.get(justification.evidence_strength, ’#6b7280’)}’>"
+54 f"**{justification.evidence_strength.title()}**</span>",
+55 unsafe_allow_html=True
+56 )
+57
+58 # Rubric criteria
+59 st.info(f"**Rubric Match:** {justification.rubric_criteria}")
+Copyright ©2025 QuantUniversity LLC 17
+
+--- page 18 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+60
+61 # Supporting evidence (from CS4 RAG)
+62 st.markdown("**Supporting Evidence:**")
+63 for i, evidence in enumerate(justification.supporting_evidence[:5], 1):
+64 with st.expander(f"[{evidence.source_type}] {evidence.content[:50]}...", expanded=False):
+65 st.write(evidence.content)
+66 st.caption(f"Confidence: {evidence.confidence:.0%}")
+67 if hasattr(evidence, ’source_url’) and evidence.source_url:
+68 st.markdown(f"[Source]({evidence.source_url})")
+69
+70 # Gaps identified
+71 if justification.gaps_identified:
+72 st.warning("**Gaps Identified:**")
+73 for gap in justification.gaps_identified:
+74 st.markdown(f"- {gap}")
+75
+76 st.divider()
+77
+78def render_company_evidence_panel(
+79 company_id: str,
+80 justifications: Dict[str, ScoreJustification],
+81) -> None:
+82 """
+83 Render full evidence panel for a company.
+84
+85 Displays:
+86 - Summary metrics
+87 - All 7 dimensions with evidence
+88 - Dimension filtering
+89 """
+90 st.header(f" Evidence Analysis: {company_id}")
+91
+92 # Summary metrics
+93 total_evidence = sum(len(j.supporting_evidence) for j in justifications.values())
+94 avg_level = sum(j.level for j in justifications.values()) / len(justifications)
+95 strong_count = sum(1 for j in justifications.values() if j.evidence_strength == "strong")
+96
+97 col1, col2, col3, col4 = st.columns(4)
+98 col1.metric("Total Evidence", total_evidence)
+99 col2.metric("Avg Level", f"L{avg_level:.1f}")
+100 col3.metric("Strong Evidence", f"{strong_count}/7")
+101 col4.metric("Dimensions", len(justifications))
+102
+103 # Dimension tabs
+104 dim_names = [d.replace("_", " ").title() for d in justifications.keys()]
+105 tabs = st.tabs(dim_names)
+106
+107 for tab, (dim, just) in zip(tabs, justifications.items()):
+108 with tab:
+109 render_evidence_card(just)
+110
+111 def render_evidence_summary_table(
+112 justifications: Dict[str, ScoreJustification],
+113 ) -> None:
+114 """Render compact summary table of all dimensions."""
+115 import pandas as pd
+116
+117 data = []
+118 for dim, just in justifications.items():
+119 data.append({
+120 "Dimension": dim.replace("_", " ").title(),
+121 "Score": just.score,
+122 "Level": f"L{just.level}",
+123 "Evidence": just.evidence_strength.title(),
+124 "Items": len(just.supporting_evidence),
+125 "Gaps": len(just.gaps_identified),
+126 })
+127
+128 df = pd.DataFrame(data)
+129
+Copyright ©2025 QuantUniversity LLC 18
+
+--- page 19 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+130 # Style the dataframe
+131 def color_level(val):
+132 level = int(val[1])
+133 return f"background-color: {LEVEL_COLORS.get(level, ’#ffffff’)}; color: white;"
+134
+135 styled = df.style.applymap(color_level, subset=["Level"])
+136 st.dataframe(styled, use_container_width=True, hide_index=True)
+Copyright ©2025 QuantUniversity LLC 19
+
+--- page 20 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+8 Task 9.6: Portfolio Dashboard (10 pts) [REQUIRED]
+dashboard/app.py — Portfolio Dashboard [v4 FIX]
+1"""
+2PE Org-AI-R Portfolio Intelligence Dashboard.
+3
+4ALL DATA comes from CS1-CS4 via PortfolioDataService.
+5
+6v4 FIX: Added nest_asyncio for Streamlit async compatibility
+7"""
+8import streamlit as st
+9import plotly.express as px
+10import pandas as pd
+11import asyncio
+12
+13# v4 FIX: Required for Streamlit async compatibility
+14import nest_asyncio
+15nest_asyncio.apply()
+16
+17from services.integration.portfolio_data_service import portfolio_data_service
+18from services.tracking.assessment_history import create_history_service
+19from services.cs1_client import CS1Client
+20from services.cs3_client import CS3Client
+21from dashboard.components.evidence_display import render_evidence_summary_table
+22
+23st.set_page_config(
+24 page_title="PE Org-AI-R Dashboard",
+25 page_icon="chart_with_upwards_trend",
+26 layout="wide",
+27)
+28
+29# Sidebar
+30st.sidebar.title("PE Org-AI-R")
+31fund_id = st.sidebar.text_input("Fund ID", value="growth_fund_v")
+32
+33# v4 FIX: Proper async pattern for Streamlit
+34@st.cache_data(ttl=300)
+35def load_portfolio(_fund_id: str):
+36 """Load portfolio data synchronously for Streamlit."""
+37 async def _load():
+38 return await portfolio_data_service.get_portfolio_view(_fund_id)
+39
+40 loop = asyncio.new_event_loop()
+41 asyncio.set_event_loop(loop)
+42 try:
+43 portfolio = loop.run_until_complete(_load())
+44 return pd.DataFrame([
+45 {
+46 "ticker": c.ticker,
+47 "name": c.name,
+48 "sector": c.sector,
+49 "org_air": c.org_air,
+50 "vr_score": c.vr_score,
+51 "hr_score": c.hr_score,
+52 "delta": c.delta_since_entry,
+53 "evidence_count": c.evidence_count,
+54 }
+55 for c in portfolio
+56 ])
+57 finally:
+58 loop.close()
+59
+60try:
+61 portfolio_df = load_portfolio(fund_id)
+62 st.sidebar.success(f"Loaded {len(portfolio_df)} companies from CS1-CS4")
+63except Exception as e:
+64 st.error(f"Failed to connect to CS1-CS4: {e}")
+65 st.info("Ensure CS1, CS2, CS3 services are running.")
+66 st.stop()
+Copyright ©2025 QuantUniversity LLC 20
+
+--- page 21 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+67
+68# Main content
+69st.title("Portfolio Overview")
+70
+71# Metrics row
+72fund_air = portfolio_df["org_air"].mean()
+73col1, col2, col3, col4 = st.columns(4)
+74with col1:
+75 st.metric("Fund-AI-R", f"{fund_air:.1f}")
+76with col2:
+77 st.metric("Companies", len(portfolio_df))
+78with col3:
+79 st.metric("Avg V^R", f"{portfolio_df[’vr_score’].mean():.1f}")
+80with col4:
+81 avg_delta = portfolio_df[’delta’].mean()
+82 st.metric("Avg Delta", f"{avg_delta:+.1f}")
+83
+84# V^R vs H^R Scatter
+85fig = px.scatter(
+86 portfolio_df,
+87 x="vr_score", y="hr_score",
+88 size="org_air", color="sector",
+89 hover_name="name",
+90 title="Portfolio AI-Readiness Map (from CS3)",
+91 labels={"vr_score": "V^R (Idiosyncratic)", "hr_score": "H^R (Systematic)"},
+92)
+93fig.add_hline(y=60, line_dash="dash", line_color="gray", annotation_text="H^R Threshold")
+94fig.add_vline(x=60, line_dash="dash", line_color="gray", annotation_text="V^R Threshold")
+95st.plotly_chart(fig, use_container_width=True)
+96
+97# Company table with conditional formatting
+98st.subheader("Portfolio Companies")
+99st.dataframe(
+100 portfolio_df.style.background_gradient(subset=["org_air"], cmap="RdYlGn"),
+101 use_container_width=True,
+102 hide_index=True,
+103 )
+Copyright ©2025 QuantUniversity LLC 21
+
+--- page 22 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+Part II
+Lab 10: LangGraph Agents + PE Workflows
+9 Lab 10 Preamble
+Date March 20, 2026 (Thursday)
+Focus LangGraph Supervisor, Specialist Agents, HITL, Fund-AI-R, Metrics
+Time Estimate Lecture: 2 hrs — Lab: 10 hrs — Challenge: +4 hrs
+9.1 Learning Objectives [v4 FIX]
+Learning Objectives
+Bloom’s Level Objective
+Remember List the four specialist agents and their responsibilities
+Understand Explain supervisor-worker pattern in multi-agent systems
+Apply Implement conditional routing based on workflow state
+Analyze Determine when HITL approval gates should trigger
+Evaluate Assess agent decisions for PE investment workflows
+Create Build end-to-end agentic due diligence pipeline
+10 Task 10.1: LangGraph State Definitions (8 pts) [AGENT]
+agents/state.py — Workflow State [v4 FIX]
+1"""LangGraph state definitions for PE Org-AI-R agents."""
+2from typing import TypedDict, Annotated, List, Dict, Any, Optional, Literal
+3from datetime import datetime # v4 FIX: Explicit import
+4import operator
+5
+6class AgentMessage(TypedDict):
+7 """Message in agent conversation."""
+8 role: Literal["user", "assistant", "system", "tool"]
+9 content: str
+10 agent_name: Optional[str]
+11 timestamp: datetime
+12
+13class DueDiligenceState(TypedDict):
+14 """State for due diligence workflow."""
+15 # Input
+16 company_id: str
+17 assessment_type: Literal["screening", "limited", "full"]
+18 requested_by: str
+19
+20 # Messages (append-only via reducer)
+21 messages: Annotated[List[AgentMessage], operator.add]
+22
+23 # Agent outputs
+24 sec_analysis: Optional[Dict[str, Any]]
+25 talent_analysis: Optional[Dict[str, Any]]
+26 scoring_result: Optional[Dict[str, Any]]
+27 evidence_justifications: Optional[Dict[str, Any]]
+28 value_creation_plan: Optional[Dict[str, Any]]
+29
+30 # Workflow control
+31 next_agent: Optional[str]
+32 requires_approval: bool
+Copyright ©2025 QuantUniversity LLC 22
+
+--- page 23 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+33 approval_reason: Optional[str]
+34 approval_status: Optional[Literal["pending", "approved", "rejected"]]
+35 approved_by: Optional[str]
+36
+37 # Metadata
+38 started_at: datetime
+39 completed_at: Optional[datetime]
+40 total_tokens: int
+41 error: Optional[str]
+Copyright ©2025 QuantUniversity LLC 23
+
+--- page 24 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+11 Task 10.2: Specialist Agents (12 pts) [AGENT]
+agents/specialists.py — Specialist Agents [v4 FIX]
+1"""Specialist agents using MCP tools to access CS1-CS4."""
+2from typing import Dict, Any
+3from datetime import datetime # v4 FIX: Import datetime
+4import json
+5import httpx
+6from langchain_openai import ChatOpenAI
+7from langchain_anthropic import ChatAnthropic
+8from langchain.tools import tool
+9import structlog
+10
+11from agents.state import DueDiligenceState
+12
+13logger = structlog.get_logger()
+14
+15# v4 FIX: HTTP client for MCP tool calls (not non-existent MCPClient)
+16class MCPToolCaller:
+17 """HTTP client wrapper for MCP server tool calls."""
+18
+19 def __init__(self, base_url: str = "http://localhost:3000"):
+20 self.base_url = base_url
+21 self.client = httpx.AsyncClient(timeout=30.0)
+22
+23 async def call_tool(self, tool_name: str, arguments: dict) -> str:
+24 """Call MCP tool via HTTP."""
+25 response = await self.client.post(
+26 f"{self.base_url}/tools/{tool_name}",
+27 json=arguments,
+28 )
+29 response.raise_for_status()
+30 return response.json().get("result", "{}")
+31
+32mcp_client = MCPToolCaller()
+33
+34# ============================================
+35# TOOLS (wrap MCP calls)
+36# ============================================
+37@tool
+38async def get_org_air_score(company_id: str) -> str:
+39 """Get Org-AI-R score for a company via MCP."""
+40 return await mcp_client.call_tool("calculate_org_air_score", {"company_id": company_id})
+41
+42@tool
+43async def get_evidence(company_id: str, dimension: str = "all") -> str:
+44 """Get evidence for a company via MCP."""
+45 return await mcp_client.call_tool("get_company_evidence", {"company_id": company_id, "dimension": dimension})
+46
+47@tool
+48async def get_justification(company_id: str, dimension: str) -> str:
+49 """Get CS4 justification for a dimension via MCP."""
+50 return await mcp_client.call_tool("generate_justification", {"company_id": company_id, "dimension": dimension
+,→})
+51
+52@tool
+53async def get_gap_analysis(company_id: str, target: float) -> str:
+54 """Run gap analysis via MCP."""
+55 return await mcp_client.call_tool("run_gap_analysis", {"company_id": company_id, "target_org_air": target})
+56
+57# ============================================
+58# SPECIALIST AGENTS
+59# ============================================
+60class SECAnalysisAgent:
+61 """Agent specialized in SEC filing analysis."""
+62
+63 def __init__(self):
+64 self.llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+65 self.tools = [get_evidence]
+Copyright ©2025 QuantUniversity LLC 24
+
+--- page 25 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+66
+67 async def analyze(self, state: DueDiligenceState) -> Dict[str, Any]:
+68 company_id = state["company_id"]
+69
+70 # Get evidence via MCP tool
+71 evidence_result = await get_evidence.ainvoke({"company_id": company_id, "dimension": "all"})
+72
+73 return {
+74 "sec_analysis": {
+75 "company_id": company_id,
+76 "findings": json.loads(evidence_result) if evidence_result else [],
+77 "dimensions_covered": ["data_infrastructure", "ai_governance", "technology_stack"],
+78 },
+79 "messages": [{
+80 "role": "assistant",
+81 "content": f"SEC analysis complete for {company_id}",
+82 "agent_name": "sec_analyst",
+83 "timestamp": datetime.utcnow(), # v4 FIX: Now works
+84 }],
+85 }
+86
+87class ScoringAgent:
+88 """Agent for calculating and explaining Org-AI-R scores."""
+89
+90 def __init__(self):
+91 self.llm = ChatAnthropic(model="claude-sonnet-4-20250514", temperature=0.2)
+92 self.tools = [get_org_air_score, get_justification]
+93
+94 async def calculate(self, state: DueDiligenceState) -> Dict[str, Any]:
+95 company_id = state["company_id"]
+96
+97 # Get score via MCP tool
+98 score_result = await get_org_air_score.ainvoke({"company_id": company_id})
+99 score_data = json.loads(score_result)
+100
+101 # Check HITL requirement
+102 org_air = score_data["org_air"]
+103 requires_approval = org_air > 85 or org_air < 40
+104 approval_reason = f"Score {org_air:.1f} outside normal range [40, 85]" if requires_approval else None
+105
+106 return {
+107 "scoring_result": score_data,
+108 "requires_approval": requires_approval,
+109 "approval_reason": approval_reason,
+110 "approval_status": "pending" if requires_approval else None,
+111 "messages": [{
+112 "role": "assistant",
+113 "content": f"Scoring complete: Org-AI-R = {org_air:.1f}" + (" [REQUIRES APPROVAL]" if
+,→requires_approval else ""),
+114 "agent_name": "scorer",
+115 "timestamp": datetime.utcnow(),
+116 }],
+117 }
+118
+119 class EvidenceAgent:
+120 """Agent for evidence retrieval and justification."""
+121
+122 def __init__(self):
+123 self.llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+124 self.tools = [get_justification]
+125
+126 async def justify(self, state: DueDiligenceState) -> Dict[str, Any]:
+127 company_id = state["company_id"]
+128
+129 dimensions = ["data_infrastructure", "talent", "use_case_portfolio"]
+130 justifications = {}
+131
+132 for dim in dimensions:
+133 result = await get_justification.ainvoke({"company_id": company_id, "dimension": dim})
+134 justifications[dim] = json.loads(result)
+Copyright ©2025 QuantUniversity LLC 25
+
+--- page 26 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+135
+136 return {
+137 "evidence_justifications": {"company_id": company_id, "justifications": justifications},
+138 "messages": [{
+139 "role": "assistant",
+140 "content": f"Generated justifications for {len(justifications)} dimensions",
+141 "agent_name": "evidence_agent",
+142 "timestamp": datetime.utcnow(),
+143 }],
+144 }
+145
+146 class ValueCreationAgent:
+147 """Agent for EBITDA projections and value creation planning."""
+148
+149 def __init__(self):
+150 self.llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+151 self.tools = [get_gap_analysis]
+152
+153 async def plan(self, state: DueDiligenceState) -> Dict[str, Any]:
+154 company_id = state["company_id"]
+155
+156 gap_result = await get_gap_analysis.ainvoke({"company_id": company_id, "target": 80.0})
+157 gap_data = json.loads(gap_result)
+158
+159 # Check HITL for large projections (simplified)
+160 projected_impact = gap_data.get("projected_ebitda_pct", 3.5)
+161 requires_approval = projected_impact > 5.0 or state.get("requires_approval", False)
+162
+163 return {
+164 "value_creation_plan": {"company_id": company_id, "gap_analysis": gap_data},
+165 "requires_approval": requires_approval,
+166 "approval_reason": state.get("approval_reason") or (f"EBITDA {projected_impact}% > 5%" if
+,→projected_impact > 5 else None),
+167 "messages": [{
+168 "role": "assistant",
+169 "content": f"Value creation plan complete. Projected impact: {projected_impact}%",
+170 "agent_name": "value_creator",
+171 "timestamp": datetime.utcnow(),
+172 }],
+173 }
+174
+175 # Instantiate agents
+176 sec_agent = SECAnalysisAgent()
+177 scoring_agent = ScoringAgent()
+178 evidence_agent = EvidenceAgent()
+179 value_agent = ValueCreationAgent()
+Copyright ©2025 QuantUniversity LLC 26
+
+--- page 27 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+12 Task 10.3: Supervisor with HITL (10 pts) [AGENT]
+HITL Approval:
+Human-in-the-Loop Approval The supervisor includes HITL approval gates for:
+Scores outside normal range (below 40 or above 85)
+EBITDA projections exceeding 5%
+Any assessment flagged for review
+agents/supervisor.py — LangGraph Supervisor
+1"""Supervisor agent with HITL approval gates."""
+2from typing import Literal, Dict, Any
+3from datetime import datetime
+4from langgraph.graph import StateGraph, END
+5from langgraph.checkpoint.memory import MemorySaver
+6import structlog
+7
+8from agents.state import DueDiligenceState
+9from agents.specialists import sec_agent, scoring_agent, evidence_agent, value_agent
+10
+11logger = structlog.get_logger()
+12
+13async def supervisor_node(state: DueDiligenceState) -> Dict[str, Any]:
+14 """Supervisor decides which agent to run next."""
+15 if state.get("requires_approval") and state.get("approval_status") == "pending":
+16 return {"next_agent": "hitl_approval"}
+17
+18 if not state.get("sec_analysis"):
+19 return {"next_agent": "sec_analyst"}
+20 elif not state.get("scoring_result"):
+21 return {"next_agent": "scorer"}
+22 elif not state.get("evidence_justifications"):
+23 return {"next_agent": "evidence_agent"}
+24 elif not state.get("value_creation_plan") and state["assessment_type"] != "screening":
+25 return {"next_agent": "value_creator"}
+26 else:
+27 return {"next_agent": "complete"}
+28
+29async def sec_analyst_node(state: DueDiligenceState) -> Dict[str, Any]:
+30 return await sec_agent.analyze(state)
+31
+32async def scorer_node(state: DueDiligenceState) -> Dict[str, Any]:
+33 return await scoring_agent.calculate(state)
+34
+35async def evidence_node(state: DueDiligenceState) -> Dict[str, Any]:
+36 return await evidence_agent.justify(state)
+37
+38async def value_creator_node(state: DueDiligenceState) -> Dict[str, Any]:
+39 return await value_agent.plan(state)
+40
+41async def hitl_approval_node(state: DueDiligenceState) -> Dict[str, Any]:
+42 """Human-in-the-loop approval gate."""
+43 logger.warning("hitl_approval_required", company_id=state["company_id"], reason=state.get("approval_reason"))
+44
+45 # In production: Send Slack/email notification, wait for response
+46 # For exercise: Auto-approve after logging
+47 return {
+48 "approval_status": "approved",
+49 "approved_by": "exercise_auto_approve",
+50 "messages": [{
+51 "role": "system",
+52 "content": f"HITL approval granted: {state.get(’approval_reason’)}",
+53 "agent_name": "hitl",
+54 "timestamp": datetime.utcnow(),
+55 }],
+Copyright ©2025 QuantUniversity LLC 27
+
+--- page 28 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+56 }
+57
+58async def complete_node(state: DueDiligenceState) -> Dict[str, Any]:
+59 return {
+60 "completed_at": datetime.utcnow(),
+61 "messages": [{"role": "assistant", "content": f"Due diligence complete for {state[’company_id’]}", "
+,→agent_name": "supervisor", "timestamp": datetime.utcnow()}],
+62 }
+63
+64def create_due_diligence_graph():
+65 workflow = StateGraph(DueDiligenceState)
+66
+67 workflow.add_node("supervisor", supervisor_node)
+68 workflow.add_node("sec_analyst", sec_analyst_node)
+69 workflow.add_node("scorer", scorer_node)
+70 workflow.add_node("evidence_agent", evidence_node)
+71 workflow.add_node("value_creator", value_creator_node)
+72 workflow.add_node("hitl_approval", hitl_approval_node)
+73 workflow.add_node("complete", complete_node)
+74
+75 workflow.add_conditional_edges("supervisor", lambda s: s["next_agent"], {
+76 "sec_analyst": "sec_analyst", "scorer": "scorer", "evidence_agent": "evidence_agent",
+77 "value_creator": "value_creator", "hitl_approval": "hitl_approval", "complete": "complete",
+78 })
+79
+80 for agent in ["sec_analyst", "scorer", "evidence_agent", "value_creator"]:
+81 workflow.add_edge(agent, "supervisor")
+82 workflow.add_edge("hitl_approval", "supervisor")
+83 workflow.add_edge("complete", END)
+84 workflow.set_entry_point("supervisor")
+85
+86 return workflow.compile(checkpointer=MemorySaver())
+87
+88dd_graph = create_due_diligence_graph()
+Copyright ©2025 QuantUniversity LLC 28
+
+--- page 29 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+13 Task 10.4: Agentic Due Diligence Workflow (10 pts) [AGENT]
+Practical Exercise:
+Complete Multi-Agent Workflow This exercise runs the complete agentic due diligence process.
+exercises/agentic duediligence.py
+1"""Agentic Due Diligence - Complete Multi-Agent Workflow."""
+2import asyncio
+3from datetime import datetime
+4from agents.supervisor import dd_graph
+5from agents.state import DueDiligenceState
+6
+7async def run_due_diligence(company_id: str, assessment_type: str = "full") -> DueDiligenceState:
+8 initial_state: DueDiligenceState = {
+9 "company_id": company_id, "assessment_type": assessment_type, "requested_by": "analyst",
+10 "messages": [], "sec_analysis": None, "talent_analysis": None, "scoring_result": None,
+11 "evidence_justifications": None, "value_creation_plan": None, "next_agent": None,
+12 "requires_approval": False, "approval_reason": None, "approval_status": None,
+13 "approved_by": None, "started_at": datetime.utcnow(), "completed_at": None,
+14 "total_tokens": 0, "error": None,
+15 }
+16
+17 config = {"configurable": {"thread_id": f"dd-{company_id}-{datetime.now().isoformat()}"}}
+18 return await dd_graph.ainvoke(initial_state, config)
+19
+20async def main():
+21 print("=" * 60)
+22 print("PE Org-AI-R: Agentic Due Diligence")
+23 print("=" * 60)
+24
+25 result = await run_due_diligence("NVDA", "full")
+26
+27 print(f"\nOrg-AI-R: {result[’scoring_result’][’org_air’]:.1f}")
+28 print(f"HITL Required: {result.get(’requires_approval’, False)}")
+29 print(f"Status: {result.get(’approval_status’, ’N/A’)}")
+30 print("\nAll data came from CS1-CS4 via MCP tools.")
+31
+32if __name__ == "__main__":
+33 asyncio.run(main())
+Copyright ©2025 QuantUniversity LLC 29
+
+--- page 30 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+14 Task 10.5: Fund-AI-R Calculator (5 pts) [NEW]
+Building on CS1-CS4
+The Fund-AI-R Calculator aggregates company-level Org-AI-R scores into a portfolio-level metric
+using EV-weighted averaging.
+services/analytics/fund air.py [NEW]
+1"""Fund-AI-R Calculator - Portfolio-level AI-readiness aggregation."""
+2from dataclasses import dataclass
+3from typing import List, Dict
+4import structlog
+5
+6from services.integration.portfolio_data_service import PortfolioCompanyView
+7
+8logger = structlog.get_logger()
+9
+10# Sector benchmarks for quartile calculation
+11SECTOR_BENCHMARKS = {
+12 "technology": {"q1": 75, "q2": 65, "q3": 55, "q4": 45},
+13 "healthcare": {"q1": 70, "q2": 58, "q3": 48, "q4": 38},
+14 "financial_services": {"q1": 72, "q2": 60, "q3": 50, "q4": 40},
+15 "manufacturing": {"q1": 68, "q2": 55, "q3": 45, "q4": 35},
+16 "retail": {"q1": 65, "q2": 52, "q3": 42, "q4": 32},
+17 "energy": {"q1": 60, "q2": 48, "q3": 38, "q4": 28},
+18}
+19
+20@dataclass
+21class FundMetrics:
+22 """Fund-level AI-readiness metrics."""
+23 fund_id: str
+24 fund_air: float # EV-weighted average Org-AI-R
+25 company_count: int
+26 quartile_distribution: Dict[int, int]
+27 sector_hhi: float # Herfindahl-Hirschman Index
+28 avg_delta_since_entry: float
+29 total_ev_mm: float
+30 ai_leaders_count: int # Score >= 70
+31 ai_laggards_count: int # Score < 50
+32
+33class FundAIRCalculator:
+34 """Calculates Fund-AI-R using EV-weighted aggregation."""
+35
+36 def calculate_fund_metrics(
+37 self,
+38 fund_id: str,
+39 companies: List[PortfolioCompanyView],
+40 enterprise_values: Dict[str, float],
+41 ) -> FundMetrics:
+42 if not companies:
+43 raise ValueError("Cannot calculate Fund-AI-R for empty portfolio")
+44
+45 # EV-weighted Org-AI-R
+46 total_ev = sum(enterprise_values.get(c.company_id, 100.0) for c in companies)
+47 weighted_sum = sum(enterprise_values.get(c.company_id, 100.0) * c.org_air for c in companies)
+48 fund_air = weighted_sum / total_ev if total_ev > 0 else 0.0
+49
+50 # Quartile distribution
+51 quartile_dist = {1: 0, 2: 0, 3: 0, 4: 0}
+52 for c in companies:
+53 q = self._get_quartile(c.org_air, c.sector)
+54 quartile_dist[q] += 1
+55
+56 # Sector HHI
+57 sector_ev: Dict[str, float] = {}
+58 for c in companies:
+Copyright ©2025 QuantUniversity LLC 30
+
+--- page 31 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+59 ev = enterprise_values.get(c.company_id, 100.0)
+60 sector_ev[c.sector] = sector_ev.get(c.sector, 0.0) + ev
+61 hhi = sum((ev / total_ev) ** 2 for ev in sector_ev.values()) if total_ev > 0 else 0
+62
+63 return FundMetrics(
+64 fund_id=fund_id,
+65 fund_air=round(fund_air, 1),
+66 company_count=len(companies),
+67 quartile_distribution=quartile_dist,
+68 sector_hhi=round(hhi, 4),
+69 avg_delta_since_entry=round(sum(c.delta_since_entry for c in companies) / len(companies), 1),
+70 total_ev_mm=round(total_ev, 1),
+71 ai_leaders_count=sum(1 for c in companies if c.org_air >= 70),
+72 ai_laggards_count=sum(1 for c in companies if c.org_air < 50),
+73 )
+74
+75 def _get_quartile(self, score: float, sector: str) -> int:
+76 benchmarks = SECTOR_BENCHMARKS.get(sector, SECTOR_BENCHMARKS["technology"])
+77 if score >= benchmarks["q1"]: return 1
+78 elif score >= benchmarks["q2"]: return 2
+79 elif score >= benchmarks["q3"]: return 3
+80 else: return 4
+81
+82fund_air_calculator = FundAIRCalculator()
+Copyright ©2025 QuantUniversity LLC 31
+
+--- page 32 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+15 Task 10.6: Prometheus Metrics (5 pts) [NEW]
+services/observability/metrics.py [NEW]
+1"""Prometheus Metrics for MCP Server and LangGraph Agents."""
+2from prometheus_client import Counter, Histogram, Gauge
+3from functools import wraps
+4import time
+5
+6# MCP SERVER METRICS
+7MCP_TOOL_CALLS = Counter(
+8 "mcp_tool_calls_total", "Total MCP tool invocations", ["tool_name", "status"]
+9)
+10MCP_TOOL_DURATION = Histogram(
+11 "mcp_tool_duration_seconds", "MCP tool execution duration", ["tool_name"],
+12 buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+13)
+14
+15# LANGGRAPH AGENT METRICS
+16AGENT_INVOCATIONS = Counter(
+17 "agent_invocations_total", "Total agent invocations", ["agent_name", "status"]
+18)
+19AGENT_DURATION = Histogram(
+20 "agent_duration_seconds", "Agent execution duration", ["agent_name"],
+21 buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0]
+22)
+23
+24# HITL METRICS
+25HITL_APPROVALS = Counter(
+26 "hitl_approvals_total", "HITL approval requests", ["reason", "decision"]
+27)
+28
+29# CS1-CS4 INTEGRATION METRICS
+30CS_CLIENT_CALLS = Counter(
+31 "cs_client_calls_total", "Calls to CS1-CS4 services", ["service", "endpoint", "status"]
+32)
+33
+34# DECORATORS
+35def track_mcp_tool(tool_name: str):
+36 """Decorator to track MCP tool metrics."""
+37 def decorator(func):
+38 @wraps(func)
+39 async def wrapper(*args, **kwargs):
+40 start = time.perf_counter()
+41 try:
+42 result = await func(*args, **kwargs)
+43 MCP_TOOL_CALLS.labels(tool_name=tool_name, status="success").inc()
+44 return result
+45 except Exception as e:
+46 MCP_TOOL_CALLS.labels(tool_name=tool_name, status="error").inc()
+47 raise
+48 finally:
+49 MCP_TOOL_DURATION.labels(tool_name=tool_name).observe(time.perf_counter() - start)
+50 return wrapper
+51 return decorator
+52
+53def track_agent(agent_name: str):
+54 """Decorator to track agent metrics."""
+55 def decorator(func):
+56 @wraps(func)
+57 async def wrapper(*args, **kwargs):
+58 start = time.perf_counter()
+59 try:
+60 result = await func(*args, **kwargs)
+61 AGENT_INVOCATIONS.labels(agent_name=agent_name, status="success").inc()
+62 return result
+63 except Exception as e:
+64 AGENT_INVOCATIONS.labels(agent_name=agent_name, status="error").inc()
+65 raise
+66 finally:
+Copyright ©2025 QuantUniversity LLC 32
+
+--- page 33 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+67 AGENT_DURATION.labels(agent_name=agent_name).observe(time.perf_counter() - start)
+68 return wrapper
+69 return decorator
+70
+71def track_cs_client(service: str, endpoint: str):
+72 """Decorator to track CS client calls."""
+73 def decorator(func):
+74 @wraps(func)
+75 async def wrapper(*args, **kwargs):
+76 try:
+77 result = await func(*args, **kwargs)
+78 CS_CLIENT_CALLS.labels(service=service, endpoint=endpoint, status="success").inc()
+79 return result
+80 except Exception as e:
+81 CS_CLIENT_CALLS.labels(service=service, endpoint=endpoint, status="error").inc()
+82 raise
+83 return wrapper
+84 return decorator
+Copyright ©2025 QuantUniversity LLC 33
+
+--- page 34 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+16 Common Mistakes & Troubleshooting [v4 FIX]
+Common Mistakes
+Top 5 Student Mistakes in CS5:
+1.Hardcoding mock data instead of calling CS1-CS4 APIs
+Symptom: Dashboard works but shows fake/static data
+Fix: Verify MCP tools call your actual CS client classes
+Test: Stop CS3 service — your dashboard should error, not show data
+2.Forgetting async/await in LangGraph nodes
+Symptom: RuntimeWarning: coroutine was never awaited
+Fix: All MCP tool calls must use await
+3.Missing datetime import
+Symptom: NameError: name ’datetime’ is not defined
+Fix: Add from datetime import datetime at top of file
+4.Streamlit async incompatibility
+Symptom: RuntimeError: This event loop is already running
+Fix: Add import nest asyncio; nest asyncio.apply() at start
+5.Missing HITL trigger for high scores
+Symptom: Scores of 95 approved without human review
+Fix: Check BOTH bounds: orgair > 85 or org air < 40
+17 Testing Your Implementation [v4 FIX]
+Testing:
+Verify CS1-CS4 Integration These tests verify your MCP tools actually call CS1-CS4 (not hard-
+coded data).
+tests/test mcp integration.py [NEW]
+1"""Tests to verify MCP tools call CS1-CS4."""
+2import pytest
+3from unittest.mock import AsyncMock, patch
+4
+5@pytest.mark.asyncio
+6async def test_calculate_org_air_calls_cs3():
+7 """Verify calculate_org_air_score calls CS3 client."""
+8 from mcp.server import call_tool, cs3_client
+9
+10 # Mock the CS3 client
+11 with patch.object(cs3_client, ’get_assessment’, new_callable=AsyncMock) as mock:
+12 mock.return_value = MockAssessment(org_air_score=72.5)
+13
+14 result = await call_tool("calculate_org_air_score", {"company_id": "NVDA"})
+15
+16 # CRITICAL: Verify CS3 was called
+17 mock.assert_called_once_with("NVDA")
+18
+19@pytest.mark.asyncio
+20async def test_no_hardcoded_data():
+21 """Fail if tools return data without calling CS clients."""
+22 from mcp.server import call_tool, cs3_client
+23
+24 with patch.object(cs3_client, ’get_assessment’, new_callable=AsyncMock) as mock:
+25 mock.side_effect = ConnectionError("CS3 not running")
+26
+Copyright ©2025 QuantUniversity LLC 34
+
+--- page 35 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+27 # Should raise error, NOT return hardcoded data
+28 with pytest.raises(Exception):
+29 await call_tool("calculate_org_air_score", {"company_id": "NVDA"})
+Run tests: pytest tests/ -v --tb=short
+Copyright ©2025 QuantUniversity LLC 35
+
+--- page 36 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+18 Evaluation Criteria
+Requirements
+Core Requirements (100 points)
+Lab 9: MCP Server + Integration (50 points)
+✓Task 9.1: Portfolio Data Service (CS1-CS4 integration) (8 pts)
+✓Task 9.2: MCP Server Core (6 tools minimum) (12 pts)
+✓Task 9.3: MCP Resources & Prompts (8 pts)
+✓Task 9.4: Assessment History Tracking (6 pts) [NEW]
+✓Task 9.5: Evidence Display Component (6 pts) [NEW]
+✓Task 9.6: Portfolio Dashboard (10 pts)
+Lab 10: LangGraph Agents + Workflows (50 points)
+✓Task 10.1: LangGraph State Definitions (8 pts)
+✓Task 10.2: Specialist Agents (4 agents minimum) (12 pts)
+✓Task 10.3: Supervisor with HITL (10 pts)
+✓Task 10.4: Agentic Due Diligence Workflow (10 pts)
+✓Task 10.5: Fund-AI-R Calculator (5 pts) [NEW]
+✓Task 10.6: Prometheus Metrics (5 pts) [NEW]
+Extensions (+20 bonus points)
+✓Mem0 Semantic Memory (+5 pts)
+✓Investment Tracker with ROI (+5 pts)
+✓IC Memo Generator (Word doc) (+5 pts)
+✓LP Letter Generator (+5 pts)
+Warning
+Grading Penalty for Mock Data
+Submissions using hardcoded data will receive maximum 50% credit .
+We verify by:
+Checking MCP tools call CS1-CS4 clients
+Running pytest with CS services stopped (should error)
+Reviewing code for hardcoded return values
+Copyright ©2025 QuantUniversity LLC 36
+
+--- page 37 ---
+Case Study 5: Agentic Portfolio Intelligence (v4) Labs 9-10 — MCP + LangGraph + CS1-CS4
+19 Submission
+Due: March 27, 2026 at 3:59 PM
+cs5agentic portfolio/
+|-- src/
+|-- services/
+integration/portfolio data service.py # CS1-CS4 integration
+tracking/assessment history.py # NEW: History
+analytics/fund air.py # NEW: Fund-AI-R
+observability/metrics.py # NEW: Prometheus
+|-- mcp/server.py # MCP Server
+|-- agents/
+state.py, specialists.py, supervisor.py # LangGraph
+|-- dashboard/
+app.py # Streamlit
+components/evidence display.py # NEW: Evidence UI
+|-- tests/test mcpintegration.py # NEW: Tests
++-- README.md
+“Claude, prepare the IC meeting for NVIDIA.”
+The agentic PE Org-AI-R platform — powered by YOUR CS1-CS4 work.
+MCP + LangGraph + No Mock Data
+Designed by Sri Krishnamurthy, CFA ·sri@quantuniversity.com
+Copyright ©2025 QuantUniversity LLC. All Rights Reserved.
+Version 4.0 — All LLM-as-Judge technical review issues resolved
+Copyright ©2025 QuantUniversity LLC 37

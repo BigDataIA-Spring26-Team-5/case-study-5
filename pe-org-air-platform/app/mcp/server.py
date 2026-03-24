@@ -16,9 +16,101 @@ import time
 from datetime import datetime
 from typing import Any
 
-import mcp.types as types
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
+try:
+    import mcp.types as types  # type: ignore
+    from mcp.server import Server  # type: ignore
+    from mcp.server.stdio import stdio_server  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    # Optional dependency: allow importing this module (and running unit tests)
+    # even when the MCP SDK isn't installed.
+    from dataclasses import dataclass
+    from types import SimpleNamespace
+    from typing import Any as _Any
+
+    @dataclass
+    class _Tool:
+        name: str
+        description: str
+        inputSchema: dict
+
+    @dataclass
+    class _TextContent:
+        type: str
+        text: str
+
+    @dataclass
+    class _Resource:
+        uri: str
+        name: str
+        description: str
+
+    @dataclass
+    class _Prompt:
+        name: str
+        description: str
+        arguments: list
+
+    @dataclass
+    class _PromptMessage:
+        role: str
+        content: _Any
+
+    @dataclass
+    class _GetPromptResult:
+        description: str
+        messages: list
+
+    types = SimpleNamespace(  # minimal surface used by this file
+        Tool=_Tool,
+        TextContent=_TextContent,
+        Resource=_Resource,
+        Prompt=_Prompt,
+        PromptMessage=_PromptMessage,
+        GetPromptResult=_GetPromptResult,
+    )
+
+    class Server:  # type: ignore
+        def __init__(self, *_, **__):
+            pass
+
+        def list_tools(self):
+            def deco(fn):
+                return fn
+            return deco
+
+        def call_tool(self):
+            def deco(fn):
+                return fn
+            return deco
+
+        def list_resources(self):
+            def deco(fn):
+                return fn
+            return deco
+
+        def read_resource(self):
+            def deco(fn):
+                return fn
+            return deco
+
+        def list_prompts(self):
+            def deco(fn):
+                return fn
+            return deco
+
+        def get_prompt(self):
+            def deco(fn):
+                return fn
+            return deco
+
+        def create_initialization_options(self):
+            return {}
+
+        async def run(self, *_args, **_kwargs):
+            raise RuntimeError("MCP SDK not installed")
+
+    async def stdio_server():  # type: ignore
+        raise RuntimeError("MCP SDK not installed")
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +238,15 @@ def _track(name: str, status: str, duration: float) -> None:
         )
         mcp_tool_calls_total.labels(tool_name=name, status=status).inc()
         mcp_tool_duration_seconds.labels(tool_name=name).observe(duration)
+    except Exception:
+        pass
+
+
+def _track_cs(service: str, endpoint: str, status: str) -> None:
+    """Best-effort CS client metrics recording."""
+    try:
+        from app.services.observability.metrics import cs_client_calls_total
+        cs_client_calls_total.labels(service=service, endpoint=endpoint, status=status).inc()
     except Exception:
         pass
 
@@ -381,7 +482,12 @@ async def _calculate_org_air_score(args: dict) -> dict:
     """
     ticker = args["company_id"].upper()
     client = await asyncio.to_thread(_cs3)
-    assessment = await asyncio.to_thread(client.get_assessment, ticker)
+    try:
+        assessment = await asyncio.to_thread(client.get_assessment, ticker)
+        _track_cs("cs3", "get_assessment", "success")
+    except Exception:
+        _track_cs("cs3", "get_assessment", "error")
+        raise
     if not assessment:
         return {
             "company_id": ticker,
@@ -446,6 +552,7 @@ async def _get_company_evidence(args: dict) -> dict:
             return client.get(url, params=params)
 
     response = await asyncio.to_thread(_fetch)
+    _track_cs("cs2", "get_company_evidence", "success" if response.status_code == 200 else "error")
     if response.status_code != 200:
         return {
             "company_id": ticker,
@@ -470,6 +577,7 @@ async def _generate_justification(args: dict) -> dict:
             return client.get(url)
 
     response = await asyncio.to_thread(_fetch)
+    _track_cs("cs4", "generate_justification", "success" if response.status_code == 200 else "error")
     if response.status_code != 200:
         return {
             "company_id": ticker,
@@ -545,19 +653,59 @@ async def _get_portfolio_summary(args: dict) -> dict:
     svc = await asyncio.to_thread(_portfolio)
     portfolio = await asyncio.to_thread(svc.get_portfolio_view, fund_id)
 
-    # Flatten to match MCP tool schema
+    # Flatten
     companies = [
-        {"ticker": c["ticker"], "org_air": c["org_air"], "sector": c["sector"]}
+        {
+            "company_id": c.get("company_id"),
+            "ticker": c.get("ticker"),
+            "org_air": float(c.get("org_air") or 0.0),
+            "sector": c.get("sector") or "",
+            "delta_since_entry": float(c.get("delta_since_entry") or 0.0),
+        }
         for c in portfolio.get("companies", [])
     ]
-    scores = [c["org_air"] for c in companies if c["org_air"] > 0]
 
-    return {
+    # CS5 Task 10.5: Fund-AI-R metrics
+    try:
+        from types import SimpleNamespace
+        from app.services.analytics.fund_air import FundAIRCalculator
+
+        company_objs = [
+            SimpleNamespace(
+                company_id=(c.get("company_id") or c.get("ticker") or ""),
+                org_air=float(c.get("org_air") or 0.0),
+                sector=c.get("sector") or "technology",
+                delta_since_entry=float(c.get("delta_since_entry") or 0.0),
+            )
+            for c in companies
+        ]
+        metrics = FundAIRCalculator().calculate_fund_metrics(fund_id, company_objs)
+        metrics_dict = metrics.to_dict()
+    except Exception as e:
+        logger.warning("fund_air_metrics_failed", error=str(e))
+        metrics_dict = {}
+
+    # Preserve the original fields, then add CS5 fund metrics when available
+    out = {
         "fund_id": fund_id,
-        "fund_air": round(sum(scores) / len(scores), 1) if scores else 0.0,
+        "fund_air": float(metrics_dict.get("fund_air")) if metrics_dict else (
+            round(sum(c["org_air"] for c in companies if c["org_air"] > 0) / len([c for c in companies if c["org_air"] > 0]), 1)
+            if any(c["org_air"] > 0 for c in companies) else 0.0
+        ),
         "company_count": len(companies),
-        "companies": companies,
+        "companies": [{"ticker": c["ticker"], "org_air": c["org_air"], "sector": c["sector"]} for c in companies],
     }
+    for key in (
+        "quartile_distribution",
+        "sector_hhi",
+        "avg_delta_since_entry",
+        "total_ev_mm",
+        "ai_leaders_count",
+        "ai_laggards_count",
+    ):
+        if key in metrics_dict:
+            out[key] = metrics_dict[key]
+    return out
 
 
 # ---------------------------------------------------------------------------

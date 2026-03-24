@@ -295,6 +295,21 @@ class CompanyRepository(BaseRepository):
             finally:
                 cur.close()
 
+    def find_portfolio_id_by_name(self, name: str) -> Optional[str]:
+        """Resolve portfolio UUID by exact name match (case-insensitive)."""
+        sql = "SELECT id FROM cs4_portfolios WHERE LOWER(name) = LOWER(%s) LIMIT 1"
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (name,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return str(row[0])
+            finally:
+                cur.close()
+
+
     def update(
         self,
         company_id: UUID,

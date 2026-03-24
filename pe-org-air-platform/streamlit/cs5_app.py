@@ -86,42 +86,38 @@ from evidence_display import (  # noqa: E402
 # ============================================================================
 BASE_URL = "http://localhost:8000"
 
-# Default portfolio — shown before user loads Snowflake companies
-_DEFAULT_PORTFOLIO = [
-    {"ticker": "NVDA", "name": "NVIDIA Corporation",          "sector": "Technology"},
-    {"ticker": "JPM",  "name": "JPMorgan Chase & Co.",        "sector": "Financial Services"},
-    {"ticker": "WMT",  "name": "Walmart Inc.",                "sector": "Retail"},
-    {"ticker": "GE",   "name": "GE Aerospace",                "sector": "Manufacturing"},
-    {"ticker": "DG",   "name": "Dollar General Corporation",  "sector": "Retail"},
-]
+_DEFAULT_PORTFOLIO: list[dict] = []
 
 
 @st.cache_data(ttl=120)
 def fetch_available_companies() -> list[dict]:
-    """Fetch all companies from Snowflake via GET /api/v1/companies.
+    """Fetch all companies from Snowflake via GET /api/v1/companies/all.
 
-    Returns list of dicts with ticker, name, sector.
-    Falls back to _DEFAULT_PORTFOLIO if API is unreachable.
+    Returns list of dicts with ticker, name, sector, position_factor.
+
+    Note: CS5 grading forbids mock data; if the API is unreachable this
+    dashboard intentionally fails fast instead of returning hardcoded tickers.
     """
-    try:
-        r = requests.get(f"{BASE_URL}/api/v1/companies", params={"page_size": 100}, timeout=10)
-        if r.status_code == 200:
-            items = r.json().get("items", [])
-            companies = []
-            for item in items:
-                ticker = item.get("ticker")
-                if ticker:  # only include companies with a ticker
-                    companies.append({
-                        "ticker":  ticker.upper(),
-                        "name":    item.get("name", ticker),
-                        "sector":  item.get("sector") or "Unknown",
-                    })
-            # Sort alphabetically by ticker
-            companies.sort(key=lambda c: c["ticker"])
-            return companies if companies else _DEFAULT_PORTFOLIO
-    except Exception:
-        pass
-    return _DEFAULT_PORTFOLIO
+    # Snowflake-backed queries can be slow on cold start; do not cap the read
+    # timeout (but keep a small connect timeout so a down API doesn't hang the UI).
+    r = requests.get(
+        f"{BASE_URL}/api/v1/companies/all",
+        timeout=(3.0, None),  # (connect, read)
+    )
+    r.raise_for_status()
+    items = r.json().get("items", [])
+    companies = []
+    for item in items:
+        ticker = item.get("ticker")
+        if ticker:
+            companies.append({
+                "ticker": ticker.upper(),
+                "name": item.get("name", ticker),
+                "sector": item.get("sector") or "Unknown",
+                "position_factor": float(item.get("position_factor") or 0.0),
+            })
+    companies.sort(key=lambda c: c["ticker"])
+    return companies
 
 # ============================================================================
 # Page config — must be the FIRST st.* call
@@ -140,7 +136,7 @@ _ss_defaults = {
     "selected_ticker":  "NVDA",
     "workflow_ticker":  "NVDA",
     "workflow_result":  None,
-    "portfolio":        _DEFAULT_PORTFOLIO,   # overwritten by sidebar selector
+    "portfolio":        _DEFAULT_PORTFOLIO,   # populated by sidebar selector
 }
 for _k, _v in _ss_defaults.items():
     if _k not in st.session_state:
@@ -152,14 +148,28 @@ for _k, _v in _ss_defaults.items():
 # ============================================================================
 with st.sidebar:
     st.markdown("### Portfolio Configuration")
+    reports_fund_id = st.text_input(
+        "Fund ID (reports)",
+        value="PE-FUND-I",
+        help="Used for LP letter generation and portfolio-level reporting",
+        key="reports_fund_id",
+    ).strip()
 
-    all_companies = fetch_available_companies()
+    try:
+        all_companies = fetch_available_companies()
+    except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError) as exc:
+        st.error(f"API unreachable: {exc}")
+        st.info("Start FastAPI first: `poetry run uvicorn app.main:app --reload --port 8000`")
+        if st.button("Retry", key="btn_retry_api2", use_container_width=True, type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+        st.stop()
     all_tickers   = [c["ticker"] for c in all_companies]
 
     # Default selection: keep current portfolio or fall back to first 5
     default_tickers = [
-        c["ticker"] for c in st.session_state["portfolio"]
-        if c["ticker"] in all_tickers
+        c["ticker"] for c in st.session_state.get("portfolio", [])
+        if c.get("ticker") in all_tickers
     ] or all_tickers[:5]
 
     selected_tickers = st.multiselect(
@@ -242,6 +252,114 @@ with st.sidebar:
                 st.write(r["narrative"])
         st.caption(f"thread: `{r.get('thread_id', '')}`")
 
+        st.markdown("### Bonus Outputs")
+
+        # ROI projection
+        if st.button("Compute ROI (Bonus)", key="bonus_roi_btn", use_container_width=True):
+            try:
+                roi_resp = requests.get(f"{BASE_URL}/api/v1/bonus/roi/{r['ticker']}", timeout=30)
+                if roi_resp.status_code == 200:
+                    st.session_state["bonus_roi"] = roi_resp.json()
+                else:
+                    st.session_state["bonus_roi_err"] = roi_resp.text[:200]
+            except Exception as e:
+                st.session_state["bonus_roi_err"] = str(e)
+
+        if st.session_state.get("bonus_roi"):
+            roi = st.session_state["bonus_roi"]
+            st.metric("ROI estimate (%)", f"{roi.get('roi_estimate_pct', 0.0):.2f}")
+            st.caption(
+                f"Revenue lift: {roi.get('projected_revenue_lift_pct', 0.0):.2f}% | "
+                f"EBITDA lift: {roi.get('projected_ebitda_lift_pct', 0.0):.2f}% | "
+                f"Exit multiple: {roi.get('projected_exit_multiple_expansion', 0.0):.3f}x"
+            )
+        if st.session_state.get("bonus_roi_err"):
+            st.error(st.session_state["bonus_roi_err"])
+
+        # IC memo generation
+        if st.button("Generate IC Memo (.docx)", key="bonus_ic_memo_btn", use_container_width=True):
+            try:
+                memo_resp = requests.post(
+                    f"{BASE_URL}/api/v1/bonus/reports/ic-memo/{r['ticker']}",
+                    params={"persist": "false"},
+                    timeout=120,
+                )
+                if memo_resp.status_code == 200:
+                    st.session_state["bonus_ic_memo_bytes"] = memo_resp.content
+                    fname = memo_resp.headers.get("content-disposition", "")
+                    if "filename=" in fname:
+                        st.session_state["bonus_ic_memo_name"] = fname.split("filename=", 1)[1].strip().strip('"')
+                    else:
+                        st.session_state["bonus_ic_memo_name"] = f"ic_memo_{r['ticker']}.docx"
+                else:
+                    st.session_state["bonus_ic_memo_err"] = memo_resp.text[:200]
+            except Exception as e:
+                st.session_state["bonus_ic_memo_err"] = str(e)
+
+        if st.session_state.get("bonus_ic_memo_bytes"):
+            st.download_button(
+                "Download IC Memo",
+                data=st.session_state["bonus_ic_memo_bytes"],
+                file_name=st.session_state.get("bonus_ic_memo_name", "ic_memo.docx"),
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+        if st.session_state.get("bonus_ic_memo_err"):
+            st.error(st.session_state["bonus_ic_memo_err"])
+
+        # LP letter generation
+        if st.button("Generate LP Letter (.docx)", key="bonus_lp_btn", use_container_width=True):
+            try:
+                fid = reports_fund_id or "PE-FUND-I"
+                lp_resp = requests.post(
+                    f"{BASE_URL}/api/v1/bonus/reports/lp-letter/{fid}",
+                    params={"persist": "false"},
+                    timeout=120,
+                )
+                if lp_resp.status_code == 200:
+                    st.session_state["bonus_lp_bytes"] = lp_resp.content
+                    fname = lp_resp.headers.get("content-disposition", "")
+                    if "filename=" in fname:
+                        st.session_state["bonus_lp_name"] = fname.split("filename=", 1)[1].strip().strip('"')
+                    else:
+                        st.session_state["bonus_lp_name"] = f"lp_letter_{fid}.docx"
+                else:
+                    st.session_state["bonus_lp_err"] = lp_resp.text[:200]
+            except Exception as e:
+                st.session_state["bonus_lp_err"] = str(e)
+
+        if st.session_state.get("bonus_lp_bytes"):
+            st.download_button(
+                "Download LP Letter",
+                data=st.session_state["bonus_lp_bytes"],
+                file_name=st.session_state.get("bonus_lp_name", "lp_letter.docx"),
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+        if st.session_state.get("bonus_lp_err"):
+            st.error(st.session_state["bonus_lp_err"])
+
+        # Mem0 recall
+        if st.button("Recall Mem0 (Bonus)", key="bonus_mem_btn", use_container_width=True):
+            try:
+                mem_resp = requests.get(
+                    f"{BASE_URL}/api/v1/bonus/memory/{r['ticker']}",
+                    params={"query": "prior due diligence"},
+                    timeout=30,
+                )
+                if mem_resp.status_code == 200:
+                    st.session_state["bonus_mem"] = mem_resp.json()
+                else:
+                    st.session_state["bonus_mem_err"] = mem_resp.text[:200]
+            except Exception as e:
+                st.session_state["bonus_mem_err"] = str(e)
+
+        if st.session_state.get("bonus_mem"):
+            with st.expander("Mem0 recall items", expanded=False):
+                st.json(st.session_state["bonus_mem"])
+        if st.session_state.get("bonus_mem_err"):
+            st.error(st.session_state["bonus_mem_err"])
+
     if st.session_state.get("sidebar_dd_error"):
         st.error(st.session_state["sidebar_dd_error"])
 
@@ -252,58 +370,70 @@ with st.sidebar:
 # ============================================================================
 
 @st.cache_data(ttl=300)
+def _score_portfolio_bulk(tickers: tuple[str, ...]) -> dict:
+    """Score a set of tickers via the FastAPI bulk portfolio endpoint."""
+    payload = {
+        "tickers": [str(t).upper() for t in tickers],
+        "prepare_if_missing": True,
+        "estimate_ranges": False,
+        "range_strategy": "none",
+    }
+    r = requests.post(
+        f"{BASE_URL}/api/v1/scoring/orgair/portfolio",
+        json=payload,
+        timeout=(3.0, None),  # (connect, read)
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+@st.cache_data(ttl=300)
 def _load_portfolio(fund_id: str = "PE-FUND-I", tickers: tuple = ()) -> list[dict]:
-    """Load scores for the selected portfolio companies via PortfolioDataService.
+    """Load scores for the selected portfolio companies.
 
     Args:
-        fund_id:  Fund identifier (used by portfolio_data_service).
+        fund_id:  Fund identifier (kept for backwards-compat; not used for membership).
         tickers:  Tuple of selected ticker symbols (hashable for cache key).
-                  If empty, uses all 5 default companies.
-
-    Tries PortfolioDataService first, falls back to per-ticker FastAPI calls.
+                  If empty, uses the first 5 from /companies/all.
     """
-    # Try PortfolioDataService (in-process, calls CS1-CS4 directly)
-    try:
-        from app.services.portfolio_data_service import PortfolioDataService
-        from app.services.integration.cs1_client import CS1Client
-        from app.services.integration.cs2_client import CS2Client
-        from app.services.integration.cs3_client import CS3Client
-        from app.services.composite_scoring_service import CompositeScoringService
+    available = {c["ticker"]: c for c in fetch_available_companies()}
+    selected = [str(t).upper() for t in tickers] if tickers else list(available.keys())[:5]
 
-        svc = PortfolioDataService(
-            cs1_client=CS1Client(),
-            cs2_client=CS2Client(),
-            cs3_client=CS3Client(),
-            cs4_client=None,  # CS4 not needed for portfolio view
-            composite_scoring_service=CompositeScoringService(),
-        )
-        portfolio = svc.get_portfolio_view(fund_id)
-        rows = []
-        for c in portfolio.get("companies", []):
+    # Preferred: one bulk request (fast + guaranteed to match selected tickers)
+    try:
+        scored = _score_portfolio_bulk(tuple(selected))
+        by_ticker = {r.get("ticker", "").upper(): r for r in (scored.get("results") or [])}
+
+        rows: list[dict] = []
+        for ticker in selected:
+            co = available.get(ticker, {"ticker": ticker, "name": ticker, "sector": "Unknown", "position_factor": 0.0})
+            r = by_ticker.get(ticker) or {}
+            breakdown = r.get("breakdown") or {}
+
+            org_air = breakdown.get("org_air_score")
+            if org_air is None:
+                org_air = r.get("org_air_score", 0.0)
+
             rows.append({
-                "ticker":         c["ticker"],
-                "name":           c.get("name", c["ticker"]),
-                "sector":         c.get("sector", ""),
-                "org_air":        round(float(c.get("org_air", 0.0)), 2),
-                "vr_score":       round(float(c.get("vr_score", 0.0)), 2),
-                "hr_score":       round(float(c.get("hr_score", 0.0)), 2),
-                "delta":          round(float(c.get("delta_since_entry", 0.0)), 2),
-                "evidence_count": int(c.get("evidence_count", 0)),
-                "synergy":        round(float(c.get("synergy_score", 0.0)), 2),
-                "tc":             0.0,
-                "pf":             round(float(c.get("position_factor", 0.0)), 2),
+                "ticker":         ticker,
+                "name":           co.get("name", ticker),
+                "sector":         co.get("sector", "Unknown"),
+                "org_air":        round(float(org_air or 0.0), 2),
+                "vr_score":       round(float(breakdown.get("vr_score") or 0.0), 2),
+                "hr_score":       round(float(breakdown.get("hr_score") or 0.0), 2),
+                "delta":          0.0,
+                "evidence_count": 0,
+                "synergy":        round(float(breakdown.get("synergy_score") or 0.0), 2),
+                "tc":             None,
+                "pf":             round(float(co.get("position_factor") or 0.0), 2),
             })
         return rows
     except Exception:
-        pass  # Fall back to HTTP
-
-    # Fallback: per-ticker FastAPI calls
-    available = {c["ticker"]: c for c in fetch_available_companies()}
-    selected = list(tickers) if tickers else [c["ticker"] for c in _DEFAULT_PORTFOLIO]
+        pass  # Fall back to per-ticker assessment reads
 
     rows = []
     for ticker in selected:
-        co = available.get(ticker, {"ticker": ticker, "name": ticker, "sector": "Unknown"})
+        co = available.get(ticker, {"ticker": ticker, "name": ticker, "sector": "Unknown", "position_factor": 0.0})
         try:
             r = requests.get(f"{BASE_URL}/api/v1/assessments/{ticker}", timeout=15)
             if r.status_code == 200:
@@ -319,16 +449,16 @@ def _load_portfolio(fund_id: str = "PE-FUND-I", tickers: tuple = ()) -> list[dic
                     "evidence_count": 0,
                     "synergy":        round(float(d.get("synergy_score", 0.0)), 2),
                     "tc":             round(float(d.get("talent_concentration", 0.0)), 2),
-                    "pf":             round(float(d.get("position_factor", 0.0)), 2),
+                    "pf":             round(float(d.get("position_factor", co.get("position_factor", 0.0)) or 0.0), 2),
                 })
             else:
                 rows.append({**co, "org_air": 0.0, "vr_score": 0.0, "hr_score": 0.0,
                              "delta": 0.0, "evidence_count": 0,
-                             "synergy": 0.0, "tc": 0.0, "pf": 0.0})
+                             "synergy": 0.0, "tc": None, "pf": round(float(co.get("position_factor") or 0.0), 2)})
         except Exception:
             rows.append({**co, "org_air": 0.0, "vr_score": 0.0, "hr_score": 0.0,
                          "delta": 0.0, "evidence_count": 0,
-                         "synergy": 0.0, "tc": 0.0, "pf": 0.0})
+                         "synergy": 0.0, "tc": None, "pf": round(float(co.get("position_factor") or 0.0), 2)})
     return rows
 
 
@@ -350,7 +480,7 @@ def page_portfolio() -> None:
     with st.spinner("Loading scores..."):
         rows = _load_portfolio(fund_id, selected_tickers)
     df = pd.DataFrame(rows)
-    st.sidebar.success(f"Loaded {len(df)} companies from CS1-CS4")
+    st.sidebar.success(f"Loaded scores for {len(df)} selected companies")
 
     scored    = df[df["org_air"] > 0]
     fund_air  = round(scored["org_air"].mean(), 1) if not scored.empty else 0.0
@@ -597,6 +727,71 @@ def _show_result(result: dict) -> None:
 
 
 # ============================================================================
+# Page: History (Task 9.4)
+# ============================================================================
+@st.cache_data(ttl=120)
+def _load_history(ticker: str, days: int = 365) -> dict:
+    r = requests.get(
+        f"{BASE_URL}/api/v1/history/{ticker}",
+        params={"days": days},
+        timeout=(3.0, None),
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"API {r.status_code}: {r.text[:200]}")
+    return r.json()
+
+
+def page_history() -> None:
+    st.title("Assessment History")
+    st.caption("Task 9.4 — snapshots captured during DD runs.")
+
+    portfolio = st.session_state.get("portfolio", _DEFAULT_PORTFOLIO)
+    tickers = [co["ticker"] for co in portfolio]
+    if not tickers:
+        st.info("Select at least one company in the sidebar.")
+        return
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        ticker = st.selectbox("Company", tickers, key="history_ticker")
+    with col2:
+        days = st.selectbox("Lookback (days)", [30, 90, 180, 365, 730], index=3, key="history_days")
+
+    with st.spinner("Loading history..."):
+        data = _load_history(ticker, int(days))
+
+    items = data.get("items", [])
+    if not items:
+        st.info("No snapshots yet. Run DD at least once for this ticker.")
+        return
+
+    df = pd.DataFrame(items)
+    df["captured_at"] = pd.to_datetime(df.get("captured_at"), errors="coerce")
+
+    st.markdown("### Trend")
+    fig = px.line(
+        df,
+        x="captured_at",
+        y=["org_air", "vr_score", "hr_score"],
+        labels={"value": "Score", "captured_at": "Captured at", "variable": "Metric"},
+        markers=True,
+    )
+    fig.update_layout(height=380, legend=dict(orientation="h", y=1.05, x=1, xanchor="right"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Snapshots")
+    cols = ["captured_at", "assessment_type", "assessor_id", "org_air", "vr_score", "hr_score", "evidence_count"]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = None
+    st.dataframe(
+        df[cols].sort_values("captured_at", ascending=False),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+# ============================================================================
 # Navigation — called before any rendering to suppress Streamlit's
 # auto-discovery of other .py files in the same directory.
 # ============================================================================
@@ -606,6 +801,7 @@ pg = st.navigation(
             st.Page(page_portfolio, title="Portfolio Overview", icon="📊", default=True),
             st.Page(page_evidence,  title="Evidence Analysis",  icon="🔍"),
             st.Page(page_workflow,  title="Agentic Workflow",   icon="🤖"),
+            st.Page(page_history,   title="History",            icon="🕒"),
         ]
     }
 )

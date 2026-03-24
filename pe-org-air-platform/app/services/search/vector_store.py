@@ -31,8 +31,9 @@ import requests
 try:
     from sentence_transformers import SentenceTransformer
     _ST_AVAILABLE = True
-except ImportError:
+except Exception:
     _ST_AVAILABLE = False
+    SentenceTransformer = None
 
 logger = logging.getLogger(__name__)
 

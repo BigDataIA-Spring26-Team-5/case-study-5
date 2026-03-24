@@ -13,9 +13,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from langgraph.types import Command
 from pydantic import BaseModel
+
+from app.core.dependencies import get_history_service
+from app.agents.memory import agent_memory
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +116,7 @@ def _extract_summary(ticker: str, thread_id: str, state: Dict[str, Any]) -> DDSu
 async def run_due_diligence(
     ticker: str,
     body: DDRequest = None,
+    history_service=Depends(get_history_service),
 ) -> DDSummary:
     if body is None:
         body = DDRequest()
@@ -129,11 +133,19 @@ async def run_due_diligence(
             detail=f"LangGraph agents not available: {e}. Ensure langgraph is installed.",
         )
 
+    prior_context = agent_memory.recall_as_text(ticker, "prior due diligence and IC memos")
     initial_state: DueDiligenceState = {
         "company_id": ticker,
         "assessment_type": body.assessment_type,
         "requested_by": body.requested_by,
-        "messages": [],
+        "messages": (
+            [{
+                "role": "system",
+                "content": prior_context,
+                "agent_name": "memory",
+                "timestamp": datetime.now(tz=timezone.utc),
+            }] if prior_context else []
+        ),
         "sec_analysis": None,
         "talent_analysis": None,
         "scoring_result": None,
@@ -159,6 +171,40 @@ async def run_due_diligence(
     except Exception as e:
         logger.error("DD workflow failed ticker=%s: %s", ticker, e)
         raise HTTPException(status_code=500, detail=f"Workflow error: {e}")
+
+    # Best-effort: persist a CS5 snapshot for history/trends (Task 9.4)
+    try:
+        await history_service.record_assessment(
+            ticker,
+            assessor_id=body.requested_by,
+            assessment_type=body.assessment_type,
+        )
+    except Exception as e:
+        logger.warning("history_snapshot_failed ticker=%s: %s", ticker, e)
+
+    # Bonus (+5): Mem0 semantic memory storage
+    try:
+        sr = final_state.get("scoring_result") or {}
+        vcp = final_state.get("value_creation_plan") or {}
+        gap_obj = vcp.get("gap_analysis") or {}
+        top_gaps = []
+        for g in (gap_obj.get("dimension_gaps") or [])[:3]:
+            dim = g.get("dimension") or ""
+            if dim:
+                top_gaps.append(dim)
+        agent_memory.remember_assessment(
+            ticker,
+            {
+                "org_air": sr.get("org_air", 0.0),
+                "vr_score": sr.get("vr_score", 0.0),
+                "hr_score": sr.get("hr_score", 0.0),
+                "requires_approval": final_state.get("requires_approval", False),
+                "narrative": vcp.get("narrative") or "",
+                "top_gaps": top_gaps,
+            },
+        )
+    except Exception as e:
+        logger.warning("memory_store_failed ticker=%s: %s", ticker, e)
 
     # Check if graph paused at HITL interrupt (not yet completed)
     if final_state.get("approval_status") == "pending" and not final_state.get("completed_at"):
@@ -214,7 +260,11 @@ async def get_dd_status(thread_id: str) -> DDSummary:
         "Example body: `{\"decision\": \"approved\", \"approved_by\": \"analyst@firm.com\", \"comments\": \"Looks good\"}`"
     ),
 )
-async def approve_due_diligence(thread_id: str, body: DDApprovalRequest) -> DDSummary:
+async def approve_due_diligence(
+    thread_id: str,
+    body: DDApprovalRequest,
+    history_service=Depends(get_history_service),
+) -> DDSummary:
     try:
         from app.agents.supervisor import dd_graph
     except ImportError as e:
@@ -254,5 +304,15 @@ async def approve_due_diligence(thread_id: str, body: DDApprovalRequest) -> DDSu
         logger.info("DD workflow still paused after approval ticker=%s thread=%s", ticker, thread_id)
     else:
         logger.info("DD workflow resumed and complete ticker=%s thread=%s", ticker, thread_id)
+
+    # Best-effort: snapshot after approval resume
+    try:
+        await history_service.record_assessment(
+            ticker,
+            assessor_id=body.approved_by,
+            assessment_type="full",
+        )
+    except Exception as e:
+        logger.warning("history_snapshot_failed ticker=%s: %s", ticker, e)
 
     return _extract_summary(ticker, thread_id, final_state)
