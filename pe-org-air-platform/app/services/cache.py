@@ -6,7 +6,10 @@ Provides a singleton Redis cache instance with TTL constants.
 Gracefully handles Redis unavailability.
 """
 import time
-import redis
+try:
+    import redis  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    redis = None
 from typing import Any, Callable, Optional, Tuple, Type
 
 from pydantic import BaseModel, Field
@@ -38,10 +41,12 @@ def get_cache() -> Optional[RedisCache]:
     """
     global _cache
     if _cache is None:
+        if redis is None:
+            return None
         try:
             _cache = RedisCache()
             _cache.client.ping()  # Test connection
-        except (redis.RedisError, ConnectionError):
+        except Exception:
             _cache = None
     return _cache
 
