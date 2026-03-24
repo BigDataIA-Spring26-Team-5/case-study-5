@@ -21,6 +21,7 @@ HITL_EBITDA_PROJECTION_THRESHOLD) so they are never hard-coded here.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -41,6 +42,28 @@ from app.config import get_settings
 logger = structlog.get_logger()
 
 _settings = get_settings()
+
+
+def _track_agent(name: str, status: str, duration_s: float) -> None:
+    """Best-effort Prometheus metric recording for agent nodes."""
+    try:
+        from app.services.observability.metrics import (
+            agent_invocations_total,
+            agent_duration_seconds,
+        )
+        agent_invocations_total.labels(agent_name=name, status=status).inc()
+        agent_duration_seconds.labels(agent_name=name).observe(duration_s)
+    except Exception:
+        pass
+
+
+def _track_hitl(reason: str, decision: str) -> None:
+    """Best-effort Prometheus metric recording for HITL decisions."""
+    try:
+        from app.services.observability.metrics import hitl_approvals_total
+        hitl_approvals_total.labels(reason=reason or "unspecified", decision=decision).inc()
+    except Exception:
+        pass
 
 # Singleton specialist agents — shared across graph invocations.
 # ScoringAgent's HITL threshold comes from settings so it matches the
@@ -96,19 +119,51 @@ async def supervisor_node(state: DueDiligenceState) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 async def sec_analyst_node(state: DueDiligenceState) -> Dict[str, Any]:
-    return await asyncio.to_thread(_sec_agent, state)
+    start = time.time()
+    status = "success"
+    try:
+        return await asyncio.to_thread(_sec_agent, state)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        _track_agent("sec_analyst", status, time.time() - start)
 
 
 async def scorer_node(state: DueDiligenceState) -> Dict[str, Any]:
-    return await asyncio.to_thread(_scoring_agent, state)
+    start = time.time()
+    status = "success"
+    try:
+        return await asyncio.to_thread(_scoring_agent, state)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        _track_agent("scorer", status, time.time() - start)
 
 
 async def evidence_node(state: DueDiligenceState) -> Dict[str, Any]:
-    return await asyncio.to_thread(_evidence_agent, state)
+    start = time.time()
+    status = "success"
+    try:
+        return await asyncio.to_thread(_evidence_agent, state)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        _track_agent("evidence_agent", status, time.time() - start)
 
 
 async def value_creator_node(state: DueDiligenceState) -> Dict[str, Any]:
-    return await asyncio.to_thread(_value_agent, state)
+    start = time.time()
+    status = "success"
+    try:
+        return await asyncio.to_thread(_value_agent, state)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        _track_agent("value_creator", status, time.time() - start)
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +195,8 @@ def hitl_approval_node(state: DueDiligenceState) -> Dict[str, Any]:
     status = decision.get("decision", "rejected")
     approver = decision.get("approved_by", "unknown")
     comments = decision.get("comments", "")
+
+    _track_hitl(state.get("approval_reason") or "", status)
 
     if status == "approved":
         return {
