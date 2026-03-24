@@ -18,6 +18,7 @@ logger = structlog.get_logger(__name__)
 class AssessmentSnapshot:
     """Point-in-time score capture."""
     company_id: str
+    portfolio_id: Optional[str] = None
     org_air: Decimal = Decimal("0.0")
     vr_score: Decimal = Decimal("0.0")
     hr_score: Decimal = Decimal("0.0")
@@ -70,12 +71,20 @@ class AssessmentHistoryService:
         self.cs1 = cs1_client
         self.cs3 = cs3_client
         self._cache: Dict[str, List[AssessmentSnapshot]] = defaultdict(list)
+        self._snapshot_repo = None
+
+    def _get_snapshot_repo(self):
+        if self._snapshot_repo is None:
+            from app.repositories.assessment_snapshot_repository import AssessmentSnapshotRepository
+            self._snapshot_repo = AssessmentSnapshotRepository()
+        return self._snapshot_repo
 
     async def record_assessment(
         self,
         company_id: str,
         assessor_id: str = "system",
         assessment_type: str = "full",
+        portfolio_id: Optional[str] = None,
     ) -> AssessmentSnapshot:
         """Record current scores as a snapshot."""
         ticker = company_id.upper()
@@ -98,6 +107,7 @@ class AssessmentHistoryService:
             }
 
         snapshot = AssessmentSnapshot(
+            portfolio_id=portfolio_id,
             company_id=ticker,
             org_air=org_air,
             vr_score=vr,
@@ -119,25 +129,86 @@ class AssessmentHistoryService:
         return snapshot
 
     async def _store_snapshot(self, snapshot: AssessmentSnapshot) -> None:
-        """Persist snapshot to Snowflake (stub for production INSERT)."""
-        pass  # Production: INSERT INTO assessment_snapshots VALUES (...)
+        """Persist snapshot to Snowflake (best-effort).
+
+        If Snowflake is not reachable/configured, this becomes a no-op and the
+        in-memory cache still provides basic history/trend functionality.
+        """
+        try:
+            from datetime import datetime
+            captured_at = datetime.fromisoformat(snapshot.timestamp)
+            ci_lower = float(snapshot.confidence_interval[0] or 0.0)
+            ci_upper = float(snapshot.confidence_interval[1] or 0.0)
+            self._get_snapshot_repo().insert_snapshot(
+                ticker=snapshot.company_id,
+                portfolio_id=snapshot.portfolio_id,
+                assessment_type=snapshot.assessment_type,
+                assessor_id=snapshot.assessor_id,
+                captured_at=captured_at,
+                org_air=float(snapshot.org_air),
+                vr_score=float(snapshot.vr_score),
+                hr_score=float(snapshot.hr_score),
+                synergy_score=float(snapshot.synergy_score),
+                confidence_lower=ci_lower,
+                confidence_upper=ci_upper,
+                evidence_count=int(snapshot.evidence_count or 0),
+                dimension_scores={k: float(v) for k, v in (snapshot.dimension_scores or {}).items()},
+            )
+        except Exception:
+            logger.warning("snapshot_persist_failed", company_id=snapshot.company_id)
 
     async def get_history(
-        self, company_id: str, days: int = 365
+        self, company_id: str, days: int = 365, portfolio_id: Optional[str] = None
     ) -> List[AssessmentSnapshot]:
         """Retrieve snapshots for a company within the given time window."""
         ticker = company_id.upper()
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        snapshots = self._cache.get(ticker, [])
-        return [
-            s for s in snapshots
-            if datetime.fromisoformat(s.timestamp) >= cutoff
-        ]
 
-    async def calculate_trend(self, company_id: str) -> AssessmentTrend:
+        # Prefer Snowflake-backed history if available
+        try:
+            rows = self._get_snapshot_repo().list_snapshots(
+                ticker=ticker,
+                portfolio_id=portfolio_id,
+                days=days,
+            )
+            out: List[AssessmentSnapshot] = []
+            for r in rows:
+                captured_at = r.get("captured_at")
+                ts = captured_at.isoformat() if hasattr(captured_at, "isoformat") else str(captured_at)
+                out.append(
+                    AssessmentSnapshot(
+                        portfolio_id=r.get("portfolio_id") or portfolio_id,
+                        company_id=ticker,
+                        org_air=Decimal(str(r.get("org_air") or 0.0)),
+                        vr_score=Decimal(str(r.get("vr_score") or 0.0)),
+                        hr_score=Decimal(str(r.get("hr_score") or 0.0)),
+                        synergy_score=Decimal(str(r.get("synergy_score") or 0.0)),
+                        dimension_scores={
+                            k: Decimal(str(v))
+                            for k, v in (r.get("dimension_scores") or {}).items()
+                        },
+                        confidence_interval=(
+                            float(r.get("confidence_lower") or 0.0),
+                            float(r.get("confidence_upper") or 0.0),
+                        ),
+                        evidence_count=int(r.get("evidence_count") or 0),
+                        timestamp=ts,
+                        assessor_id=r.get("assessor_id") or "system",
+                        assessment_type=r.get("assessment_type") or "full",
+                    )
+                )
+            if out:
+                return out
+        except Exception:
+            pass
+
+        snapshots = self._cache.get(ticker, [])
+        return [s for s in snapshots if datetime.fromisoformat(s.timestamp) >= cutoff]
+
+    async def calculate_trend(self, company_id: str, portfolio_id: Optional[str] = None) -> AssessmentTrend:
         """Compute score trend from history."""
         ticker = company_id.upper()
-        history = await self.get_history(ticker, days=365)
+        history = await self.get_history(ticker, days=365, portfolio_id=portfolio_id)
 
         if not history:
             # Try current assessment only
