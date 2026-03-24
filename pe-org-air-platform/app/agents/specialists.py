@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.agents.state import AgentMessage, DueDiligenceState
+from app.agents.memory import agent_memory
 from app.services.llm.router import ModelRouter
 
 logger = logging.getLogger(__name__)
@@ -349,14 +350,19 @@ class SECAnalysisAgent:
             for item in evidence_items[:8]
         ) or "No evidence available."
 
+        prior = agent_memory.recall_as_text(company_id, "SEC evidence findings and Org-AI-R history")
+        sys_text = (
+            "You are a PE due-diligence analyst.  Summarise the AI readiness "
+            "signals from the evidence below in 3-5 bullet points.  Focus on "
+            "data infrastructure, governance, and technology signals."
+        )
+        if prior:
+            sys_text += f"\n\n{prior}"
+
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a PE due-diligence analyst.  Summarise the AI readiness "
-                    "signals from the evidence below in 3-5 bullet points.  Focus on "
-                    "data infrastructure, governance, and technology signals."
-                ),
+                "content": sys_text,
             },
             {
                 "role": "user",
@@ -509,13 +515,17 @@ class EvidenceAgent:
             for item in (evidence_items)[:8]
         ) or "No evidence available."
 
+        prior = agent_memory.recall_as_text(company_id, "talent signals and prior assessments")
+        sys_text = (
+            "You are a talent and workforce analyst for a private equity firm.  "
+            "Analyse the technology-hiring evidence and identify AI talent trends."
+        )
+        if prior:
+            sys_text += f"\n\n{prior}"
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a talent and workforce analyst for a private equity firm.  "
-                    "Analyse the technology-hiring evidence and identify AI talent trends."
-                ),
+                "content": sys_text,
             },
             {
                 "role": "user",
@@ -620,14 +630,19 @@ class ValueCreationAgent:
         # 4. LLM narrative
         gap_text = json.dumps(gap_result, indent=2)[:800]
         ebitda_text = json.dumps(ebitda_result, indent=2)[:400]
+        prior = agent_memory.recall_as_text(company_id, "value creation plan, gaps, and EBITDA impact")
+        sys_text = (
+            "You are a value-creation specialist at a private equity firm.  "
+            "Synthesise the gap analysis and EBITDA projection into a concise "
+            "investment narrative (3-5 sentences)."
+        )
+        if prior:
+            sys_text += f"\n\n{prior}"
+
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a value-creation specialist at a private equity firm.  "
-                    "Synthesise the gap analysis and EBITDA projection into a concise "
-                    "investment narrative (3-5 sentences)."
-                ),
+                "content": sys_text,
             },
             {
                 "role": "user",
