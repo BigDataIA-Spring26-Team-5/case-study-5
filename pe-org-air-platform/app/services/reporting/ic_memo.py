@@ -1,6 +1,8 @@
-"""IC Memo Generator — produces Investment Committee memo as a PDF document.
+"""IC Memo Generator — produces an Investment Committee memo (Word .docx).
 
-Requires:  weasyprint>=60.0
+CS5 bonus expects a Word document. This implementation prefers `.docx` via
+python-docx and falls back to PDF (weasyprint) or plain text if dependencies are
+missing.
 """
 from __future__ import annotations
 
@@ -103,15 +105,19 @@ ul.gaps li {
 
 
 class ICMemoGenerator:
-    """Generates IC memo PDF document from DD results.
-
-    Falls back to plain-text if weasyprint is not installed.
-    """
+    """Generates IC memo documents from DD results."""
 
     def _try_weasyprint(self) -> Optional[Any]:
         try:
             from weasyprint import HTML  # type: ignore[import]
             return HTML
+        except Exception:
+            return None
+
+    def _try_docx(self) -> Optional[Any]:
+        try:
+            from docx import Document  # type: ignore[import]
+            return Document
         except Exception:
             return None
 
@@ -122,8 +128,9 @@ class ICMemoGenerator:
         gap_analysis: Dict[str, Any],
         ebitda_projection: Dict[str, Any],
         output_path: Optional[str] = None,
+        output_format: str = "docx",
     ) -> str:
-        """Generate IC memo and save as .pdf (or .txt fallback).
+        """Generate IC memo and save as `.docx` (or PDF / `.txt` fallback).
 
         Returns:
             Path to the generated file.
@@ -132,6 +139,43 @@ class ICMemoGenerator:
         vr = scoring_result.get("vr_score", 0.0)
         hr = scoring_result.get("hr_score", 0.0)
         date_str = datetime.utcnow().strftime("%B %d, %Y")
+
+        fmt = (output_format or "").lower().strip()
+        if output_path:
+            lower = output_path.lower()
+            if lower.endswith(".docx"):
+                fmt = "docx"
+            elif lower.endswith(".pdf"):
+                fmt = "pdf"
+            elif lower.endswith(".txt"):
+                fmt = "txt"
+
+        if fmt == "docx":
+            Document = self._try_docx()
+            if Document is not None:
+                try:
+                    dim_scores = scoring_result.get("dimension_scores", {}) or {}
+                    return self._generate_docx(
+                        Document=Document,
+                        company_id=company_id,
+                        org_air=float(org_air or 0.0),
+                        vr=float(vr or 0.0),
+                        hr=float(hr or 0.0),
+                        dimension_scores=dim_scores,
+                        gap_analysis=gap_analysis,
+                        ebitda_projection=ebitda_projection,
+                        output_path=output_path,
+                        date_str=date_str,
+                    )
+                except Exception as exc:
+                    logger.exception("IC memo DOCX generation failed; falling back: %s", exc)
+            else:
+                logger.warning("python-docx not installed — falling back")
+
+        if fmt == "txt":
+            return self._generate_text(
+                company_id, org_air, vr, hr, gap_analysis, ebitda_projection, output_path, date_str
+            )
 
         HTML = self._try_weasyprint()
         if HTML is None:
@@ -278,6 +322,107 @@ class ICMemoGenerator:
             f.write(f"Org-AI-R: {org_air:.1f} | V^R: {vr:.1f} | H^R: {hr:.1f}\n")
             f.write(f"EBITDA Base: {scenarios.get('base', 'N/A')} | "
                     f"Risk-adj: {ebitda_projection.get('risk_adjusted', 'N/A')}\n")
+        return path
+
+    def _generate_docx(
+        self,
+        Document: Any,
+        company_id: str,
+        org_air: float,
+        vr: float,
+        hr: float,
+        dimension_scores: Dict[str, Any],
+        gap_analysis: Dict[str, Any],
+        ebitda_projection: Dict[str, Any],
+        output_path: Optional[str],
+        date_str: str,
+    ) -> str:
+        path = output_path or f"ic_memo_{company_id}_{datetime.now().strftime('%Y%m%d')}.docx"
+        if not path.lower().endswith(".docx"):
+            path = path + ".docx"
+
+        doc = Document()
+        doc.add_heading(f"Investment Committee Memo: {company_id}", level=1)
+        doc.add_paragraph(f"Date: {date_str}")
+        doc.add_paragraph("CONFIDENTIAL")
+
+        doc.add_heading("Executive Summary", level=2)
+        readiness = (
+            "Strong AI readiness positions for value creation."
+            if org_air >= 70
+            else "Improvement opportunities identified across key dimensions."
+        )
+        doc.add_paragraph(
+            f"{company_id} has an Org-AI-R score of {org_air:.1f}, reflecting V^R of {vr:.1f} "
+            f"and H^R of {hr:.1f}. {readiness}"
+        )
+
+        doc.add_heading("AI Readiness Assessment", level=2)
+        table = doc.add_table(rows=1, cols=3)
+        hdr = table.rows[0].cells
+        hdr[0].text = "Metric"
+        hdr[1].text = "Score"
+        hdr[2].text = "Benchmark"
+        for metric, score, bench in [
+            ("Org-AI-R", org_air, 65.0),
+            ("V^R (Valuation Readiness)", vr, 60.0),
+            ("H^R (Human Capital Risk)", hr, 60.0),
+        ]:
+            row = table.add_row().cells
+            row[0].text = str(metric)
+            row[1].text = f"{float(score):.1f}"
+            row[2].text = f"{float(bench):.1f}"
+
+        if dimension_scores:
+            doc.add_heading("Dimension Scores", level=3)
+            dim_table = doc.add_table(rows=1, cols=2)
+            dim_hdr = dim_table.rows[0].cells
+            dim_hdr[0].text = "Dimension"
+            dim_hdr[1].text = "Score"
+            for dim, score in dimension_scores.items():
+                row = dim_table.add_row().cells
+                row[0].text = str(dim).replace("_", " ").title()
+                try:
+                    row[1].text = f"{float(score or 0.0):.1f}"
+                except Exception:
+                    row[1].text = str(score)
+
+        doc.add_heading("Gap Analysis & 100-Day Plan", level=2)
+        gaps = gap_analysis.get("dimension_gaps", []) or []
+        if gaps:
+            for gap in gaps[:8]:
+                dim_name = str(gap.get("dimension", "")).replace("_", " ").title()
+                current = gap.get("current_score", "N/A")
+                target = gap.get("target_score", "N/A")
+                priority = gap.get("priority", "N/A")
+                doc.add_paragraph(
+                    f"{dim_name}: current {current} → target {target} [Priority: {priority}]",
+                    style="List Bullet",
+                )
+        else:
+            doc.add_paragraph("No gap analysis data available.")
+
+        doc.add_heading("EBITDA Impact Projection", level=2)
+        scenarios = ebitda_projection.get("scenarios", {}) or {}
+        doc.add_paragraph(
+            f"Risk-adjusted: {ebitda_projection.get('risk_adjusted', 'N/A')} | "
+            f"Delta Org-AI-R: {ebitda_projection.get('delta_air', 'N/A')}"
+        )
+        if scenarios:
+            for scenario, value in scenarios.items():
+                doc.add_paragraph(f"{str(scenario).title()}: {value}", style="List Bullet")
+
+        doc.add_heading("IC Recommendation", level=2)
+        if org_air >= 75:
+            rec_text = "PROCEED — strong AI readiness supports full capital deployment"
+        elif org_air >= 60:
+            rec_text = "PROCEED WITH MONITORING — address top 2 dimension gaps within 90 days"
+        else:
+            rec_text = "CONDITIONAL — address critical gaps before next capital deployment"
+        doc.add_paragraph(rec_text)
+
+        doc.save(path)
+        logger.info("IC memo saved to %s", path)
         return path
 
 
