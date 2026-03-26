@@ -7,14 +7,13 @@ Endpoints:
 Already registered in main.py as pf_router.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any
 import logging
 import time
 
-from app.config.company_mappings import CS3_PORTFOLIO
-from app.core.dependencies import get_composite_scoring_service
+from app.core.dependencies import get_composite_scoring_service, get_company_repository
 from app.services.composite_scoring_service import PFResponse
 
 logger = logging.getLogger(__name__)
@@ -58,6 +57,7 @@ class PortfolioPFResponse(BaseModel):
 )
 async def score_portfolio_pf(
     svc=Depends(get_composite_scoring_service),
+    company_repo=Depends(get_company_repository),
 ):
     """Calculate Position Factor for all 5 companies."""
     start = time.time()
@@ -70,7 +70,15 @@ async def score_portfolio_pf(
     scored = 0
     failed = 0
 
-    for ticker in CS3_PORTFOLIO:
+    rows = company_repo.get_all()
+    tickers = [str(r.get("ticker") or "").upper() for r in rows or [] if r.get("ticker")]
+    if not tickers:
+        raise HTTPException(
+            status_code=400,
+            detail="No companies found in the companies table. Ingest/register companies before portfolio scoring.",
+        )
+
+    for ticker in tickers:
         result = svc.compute_pf(ticker)
         results.append(result)
         if result.status == "success":
