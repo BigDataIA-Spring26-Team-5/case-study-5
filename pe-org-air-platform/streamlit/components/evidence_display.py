@@ -17,7 +17,13 @@ import pandas as pd
 import requests
 from typing import Dict, List, Optional, Any
 
-BASE_URL = "http://localhost:8000"
+try:
+    # When used inside CS5, `streamlit/` is on sys.path.
+    from utils.api_base import api_base_url
+
+    BASE_URL = api_base_url()
+except Exception:
+    BASE_URL = "http://localhost:8000"
 
 DIMENSIONS = [
     "data_infrastructure",
