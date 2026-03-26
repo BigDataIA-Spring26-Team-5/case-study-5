@@ -227,23 +227,67 @@ class MCPToolCaller:
 
     # ── Tool 6: get_portfolio_summary ────────────────────────────────────────
     def get_portfolio_summary(self, fund_id: str = "PE-FUND-I") -> Dict[str, Any]:
-        """Reads org_air from SCORING table (same source as Tool 1)."""
+        """Reads portfolio membership from CS1, then org_air from the SCORING table."""
         from app.services.composite_scoring_service import COMPANY_SECTORS
-        from app.config.company_mappings import CS3_PORTFOLIO
+        import re
+
+        def _looks_like_uuid(v: str) -> bool:
+            return bool(
+                re.fullmatch(
+                    r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}",
+                    (v or "").strip(),
+                )
+            )
+
         repo = self._get_composite_repo()
-        companies = []
-        for ticker in CS3_PORTFOLIO:
+
+        fund_id = (fund_id or "").strip() or "PE-FUND-I"
+        if _looks_like_uuid(fund_id):
+            portfolio_id = fund_id
+        else:
+            resp = self._http.get(
+                f"{self.base_url}/api/v1/portfolios/resolve",
+                params={"name": fund_id},
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"Portfolio resolve failed: {resp.status_code} {resp.text[:200]}"
+                )
+            portfolio_id = (resp.json() or {}).get("portfolio_id")
+
+        if not portfolio_id:
+            raise ValueError(f"Unknown portfolio: {fund_id}")
+
+        resp = self._http.get(f"{self.base_url}/api/v1/portfolios/{portfolio_id}/companies")
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Portfolio companies fetch failed: {resp.status_code} {resp.text[:200]}"
+            )
+        items = (resp.json() or {}).get("items", [])
+        tickers = [
+            str(it.get("ticker") or "").upper()
+            for it in items
+            if it.get("ticker")
+        ]
+        if not tickers:
+            raise ValueError(f"Portfolio '{fund_id}' has no companies with tickers")
+
+        companies: List[Dict[str, Any]] = []
+        for ticker in tickers:
             row = repo._query(ticker, ["ticker", "org_air"])
             if row:
                 row = {k.lower(): v for k, v in row.items()}
                 org_air = float(row.get("org_air") or 0.0)
             else:
                 org_air = 0.0
-            companies.append({
-                "ticker": ticker,
-                "org_air": org_air,
-                "sector": COMPANY_SECTORS.get(ticker, ""),
-            })
+            companies.append(
+                {
+                    "ticker": ticker,
+                    "org_air": org_air,
+                    "sector": COMPANY_SECTORS.get(ticker, ""),
+                }
+            )
+
         scores = [c["org_air"] for c in companies if c["org_air"] > 0]
         return {
             "fund_id": fund_id,
