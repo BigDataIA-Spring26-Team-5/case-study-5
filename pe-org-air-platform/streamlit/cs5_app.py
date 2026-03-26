@@ -1,5 +1,5 @@
-"""
-PE Org-AI-R Platform — CS5 Agentic Portfolio Intelligence Dashboard
+﻿"""
+PE Org-AI-R Platform â€” CS5 Agentic Portfolio Intelligence Dashboard
 streamlit/cs5_app.py
 
 Run:
@@ -9,7 +9,7 @@ Run:
 from __future__ import annotations
 
 # ============================================================================
-# sys.path surgery — MUST run before any other import.
+# sys.path surgery â€” MUST run before any other import.
 #
 # Problem: Streamlit adds the script directory AND '' (CWD) to sys.path
 # before the user script runs.  When the script lives in streamlit/ and the
@@ -46,7 +46,7 @@ sys.path = [p for p in sys.path if _norm(p) != _HERE_NORM]
 if os.path.normcase(_ROOT) not in [_norm(p) for p in sys.path]:
     sys.path.insert(0, _ROOT)
 
-# Only components/ at the back — no app.py there, no shadowing
+# Only components/ at the back â€” no app.py there, no shadowing
 if os.path.normcase(_COMPONENTS) not in [_norm(p) for p in sys.path]:
     sys.path.append(_COMPONENTS)
 
@@ -55,7 +55,7 @@ _cached_app = sys.modules.get("app")
 if _cached_app is not None:
     _cached_file = os.path.normcase(getattr(_cached_app, "__file__", "") or "")
     if _HERE_NORM in _cached_file or not _cached_file:
-        # Wrong module — remove it and any submodules that depended on it
+        # Wrong module â€” remove it and any submodules that depended on it
         to_del = [k for k in list(sys.modules) if k == "app" or k.startswith("app.")]
         for k in to_del:
             del sys.modules[k]
@@ -75,7 +75,10 @@ try:
 except ImportError:
     pass
 
-# evidence_display lives in components/ which is on sys.path — import directly
+# Reads API_BASE_URL / FASTAPI_URL from `pe-org-air-platform/.env`
+from utils.api_base import api_base_url  # noqa: E402
+
+# evidence_display lives in components/ which is on sys.path â€” import directly
 from evidence_display import (  # noqa: E402
     render_company_evidence_panel,
     fetch_all_justifications,
@@ -84,12 +87,49 @@ from evidence_display import (  # noqa: E402
 # ============================================================================
 # Constants
 # ============================================================================
-BASE_URL = "http://localhost:8000"
+BASE_URL = api_base_url()
 
 _DEFAULT_PORTFOLIO: list[dict] = []
 
 
-@st.cache_data(ttl=120)
+@st.cache_resource
+def _http() -> requests.Session:
+    s = requests.Session()
+    # Keep JSON APIs snappy by reusing connections (helps a lot on Windows).
+    s.headers.update({"Accept": "application/json"})
+    return s
+
+
+@st.cache_data(ttl=60)
+def fetch_portfolios() -> list[dict]:
+    """List CS1 portfolios (cs4_portfolios)."""
+    r = _http().get(f"{BASE_URL}/api/v1/portfolios", timeout=15)
+    r.raise_for_status()
+    return r.json().get("items", [])
+
+
+def upsert_portfolio(name: str, tickers: list[str], fund_vintage: int | None = None) -> dict:
+    payload: dict = {"name": name, "tickers": tickers}
+    if fund_vintage is not None:
+        payload["fund_vintage"] = int(fund_vintage)
+    r = _http().post(f"{BASE_URL}/api/v1/portfolios/by-name", json=payload, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+
+def load_portfolio_tickers_by_name(name: str) -> list[str]:
+    r = _http().get(f"{BASE_URL}/api/v1/portfolios/resolve", params={"name": name}, timeout=30)
+    r.raise_for_status()
+    pid = (r.json() or {}).get("portfolio_id")
+    if not pid:
+        raise RuntimeError(f"Portfolio not found: {name}")
+    r = _http().get(f"{BASE_URL}/api/v1/portfolios/{pid}/companies", timeout=60)
+    r.raise_for_status()
+    items = (r.json() or {}).get("items", [])
+    return [str(it.get("ticker") or "").upper() for it in items if it.get("ticker")]
+
+
+@st.cache_data(ttl=900)
 def fetch_available_companies() -> list[dict]:
     """Fetch all companies from Snowflake via GET /api/v1/companies/all.
 
@@ -100,7 +140,7 @@ def fetch_available_companies() -> list[dict]:
     """
     # Snowflake-backed queries can be slow on cold start; do not cap the read
     # timeout (but keep a small connect timeout so a down API doesn't hang the UI).
-    r = requests.get(
+    r = _http().get(
         f"{BASE_URL}/api/v1/companies/all",
         timeout=(3.0, None),  # (connect, read)
     )
@@ -120,10 +160,10 @@ def fetch_available_companies() -> list[dict]:
     return companies
 
 # ============================================================================
-# Page config — must be the FIRST st.* call
+# Page config â€” must be the FIRST st.* call
 # ============================================================================
 st.set_page_config(
-    page_title="PE Org-AI-R · CS5 Portfolio Intelligence",
+    page_title="PE OrgAIR · CS5 Portfolio Intelligence",
     page_icon="🏦",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -137,6 +177,8 @@ _ss_defaults = {
     "workflow_ticker":  "NVDA",
     "workflow_result":  None,
     "portfolio":        _DEFAULT_PORTFOLIO,   # populated by sidebar selector
+    "active_portfolio_name": "",
+    "loaded_portfolio_from_query": False,
 }
 for _k, _v in _ss_defaults.items():
     if _k not in st.session_state:
@@ -144,7 +186,7 @@ for _k, _v in _ss_defaults.items():
 
 
 # ============================================================================
-# Sidebar — Portfolio Selector (loads companies from Snowflake)
+# Sidebar â€” Portfolio Selector (loads companies from Snowflake)
 # ============================================================================
 with st.sidebar:
     st.markdown("### Portfolio Configuration")
@@ -161,10 +203,98 @@ with st.sidebar:
         st.error(f"API unreachable: {exc}")
         st.info("Start FastAPI first: `poetry run uvicorn app.main:app --reload --port 8000`")
         if st.button("Retry", key="btn_retry_api2", use_container_width=True, type="primary"):
-            st.cache_data.clear()
+            fetch_available_companies.clear()
             st.rerun()
         st.stop()
     all_tickers   = [c["ticker"] for c in all_companies]
+    ticker_to_name = {c["ticker"]: c.get("name", c["ticker"]) for c in all_companies}
+
+    # Portfolio persistence (CS1 tables) ------------------------------------------------
+    st.markdown("#### Saved Portfolios (CS1)")
+    try:
+        saved = fetch_portfolios()
+    except Exception:
+        saved = []
+
+    saved_names = [p.get("name") for p in saved if p.get("name")]
+    # Prefer query param for refresh persistence
+    qp_name = ""
+    try:
+        qp_name = (st.query_params.get("portfolio") or "").strip()  # type: ignore[attr-defined]
+    except Exception:
+        qp_name = ""
+
+    if qp_name and not st.session_state.get("active_portfolio_name"):
+        st.session_state["active_portfolio_name"] = qp_name
+
+    # Auto-load on refresh when query param is set
+    if qp_name and not st.session_state.get("loaded_portfolio_from_query"):
+        try:
+            tickers = load_portfolio_tickers_by_name(qp_name)
+            st.session_state["portfolio_multiselect"] = tickers
+            st.session_state["active_portfolio_name"] = qp_name
+        except Exception:
+            pass
+        st.session_state["loaded_portfolio_from_query"] = True
+
+    active_name = st.selectbox(
+        "Load a saved portfolio",
+        options=[""] + saved_names,
+        index=([""] + saved_names).index(st.session_state.get("active_portfolio_name", ""))
+        if st.session_state.get("active_portfolio_name", "") in ([""] + saved_names)
+        else 0,
+        key="saved_portfolio_select",
+        help="These portfolios persist in Snowflake (cs4_portfolios tables).",
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Load", key="btn_load_portfolio", use_container_width=True):
+            if active_name:
+                try:
+                    tickers = load_portfolio_tickers_by_name(active_name)
+                    st.session_state["portfolio_multiselect"] = tickers
+                    st.session_state["active_portfolio_name"] = active_name
+                    try:
+                        st.query_params["portfolio"] = active_name  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+            else:
+                st.info("Pick a portfolio name first.")
+    with col_b:
+        if st.button("Clear", key="btn_clear_portfolio", use_container_width=True):
+            st.session_state["active_portfolio_name"] = ""
+            try:
+                st.query_params.pop("portfolio", None)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            st.rerun()
+
+    new_name = st.text_input(
+        "Save current selection as",
+        value=st.session_state.get("active_portfolio_name") or "portfolio1",
+        key="portfolio_name_input",
+        help="Example: portfolio1, dream_portfolio, PE-FUND-I",
+    ).strip()
+    if st.button("Confirm / Save", key="btn_save_portfolio", type="primary", use_container_width=True):
+        if not new_name:
+            st.error("Portfolio name is required.")
+        else:
+            try:
+                tickers_to_save = list(st.session_state.get("portfolio_multiselect") or [])
+                upsert_portfolio(new_name, tickers_to_save)
+                st.session_state["active_portfolio_name"] = new_name
+                try:
+                    st.query_params["portfolio"] = new_name  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                st.success(f"Saved portfolio '{new_name}' ({len(tickers_to_save)} companies)")
+                fetch_portfolios.clear()
+            except Exception as exc:
+                st.error(f"Save failed: {exc}")
 
     # Default selection: keep current portfolio or fall back to first 5
     default_tickers = [
@@ -176,7 +306,7 @@ with st.sidebar:
         "Select portfolio companies",
         options=all_tickers,
         default=default_tickers,
-        format_func=lambda t: f"{t} — {next((c['name'] for c in all_companies if c['ticker'] == t), t)}",
+        format_func=lambda t: f"{t} â€” {ticker_to_name.get(t, t)}",
         help="Choose companies from your Snowflake companies table",
         key="portfolio_multiselect",
     )
@@ -194,9 +324,21 @@ with st.sidebar:
     else:
         st.warning("Select at least one company.")
 
+    # Lightweight confirmation loop (per user workflow)
+    _review_name = (new_name or st.session_state.get("active_portfolio_name") or "").strip() or "(unsaved)"
+    _ok = st.radio(
+        f"Does '{_review_name}' look good?",
+        options=["Yes", "No"],
+        horizontal=True,
+        key="portfolio_review_ok",
+        help="If No, update the company selection above, then Confirm / Save.",
+    )
+    if _ok == "No":
+        st.info("Edit the company list above, then click **Confirm / Save** to persist changes.")
+
     st.markdown("---")
 
-    # ── Quick Due Diligence Runner ────────────────────────────────────────────
+    # â”€â”€ Quick Due Diligence Runner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     st.markdown("### Run Due Diligence")
     dd_ticker = st.text_input(
         "Ticker", value="NVDA", key="dd_ticker_input",
@@ -209,7 +351,7 @@ with st.sidebar:
         key="dd_type_input",
         help="screening=fastest, full=all 4 agents",
     )
-    if st.button("▶ Run DD Workflow", key="sidebar_run_dd", type="primary",
+    if st.button("â–¶ Run DD Workflow", key="sidebar_run_dd", type="primary",
                  use_container_width=True):
         if dd_ticker:
             st.session_state["sidebar_dd_running"] = True
@@ -240,11 +382,11 @@ with st.sidebar:
 
     if st.session_state.get("sidebar_dd_result"):
         r = st.session_state["sidebar_dd_result"]
-        st.success(f"✓ DD complete — {r['ticker']}")
+        st.success(f"âœ“ DD complete â€” {r['ticker']}")
         st.markdown(f"**Org-AI-R:** `{r.get('org_air', 'N/A')}`")
         st.markdown(f"**V^R:** `{r.get('vr_score', 'N/A')}`  |  **H^R:** `{r.get('hr_score', 'N/A')}`")
         if r.get("requires_approval"):
-            st.warning(f"⚠ HITL — {r.get('approval_status')} by {r.get('approved_by')}")
+            st.warning(f"âš  HITL â€” {r.get('approval_status')} by {r.get('approved_by')}")
         else:
             st.info("HITL: not triggered")
         if r.get("narrative"):
@@ -277,11 +419,11 @@ with st.sidebar:
             st.error(st.session_state["bonus_roi_err"])
 
         # IC memo generation
-        if st.button("Generate IC Memo (.pdf)", key="bonus_ic_memo_btn", use_container_width=True):
+        if st.button("Generate IC Memo (.docx)", key="bonus_ic_memo_btn", use_container_width=True):
             try:
                 memo_resp = requests.post(
                     f"{BASE_URL}/api/v1/bonus/reports/ic-memo/{r['ticker']}",
-                    params={"persist": "false"},
+                    params={"persist": "false", "format": "docx"},
                     timeout=120,
                 )
                 if memo_resp.status_code == 200:
@@ -290,18 +432,26 @@ with st.sidebar:
                     if "filename=" in fname:
                         st.session_state["bonus_ic_memo_name"] = fname.split("filename=", 1)[1].strip().strip('"')
                     else:
-                        st.session_state["bonus_ic_memo_name"] = f"ic_memo_{r['ticker']}.pdf"
+                        st.session_state["bonus_ic_memo_name"] = f"ic_memo_{r['ticker']}.docx"
                 else:
                     st.session_state["bonus_ic_memo_err"] = memo_resp.text[:200]
             except Exception as e:
                 st.session_state["bonus_ic_memo_err"] = str(e)
 
         if st.session_state.get("bonus_ic_memo_bytes"):
+            _memo_name = st.session_state.get("bonus_ic_memo_name", "ic_memo.docx")
+            _memo_mime = (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                if _memo_name.lower().endswith(".docx")
+                else "application/pdf"
+                if _memo_name.lower().endswith(".pdf")
+                else "text/plain"
+            )
             st.download_button(
                 "Download IC Memo",
                 data=st.session_state["bonus_ic_memo_bytes"],
-                file_name=st.session_state.get("bonus_ic_memo_name", "ic_memo.pdf"),
-                mime="application/pdf",
+                file_name=_memo_name,
+                mime=_memo_mime,
                 use_container_width=True,
             )
         if st.session_state.get("bonus_ic_memo_err"):
@@ -378,7 +528,7 @@ def _score_portfolio_bulk(tickers: tuple[str, ...]) -> dict:
         "estimate_ranges": False,
         "range_strategy": "none",
     }
-    r = requests.post(
+    r = _http().post(
         f"{BASE_URL}/api/v1/scoring/orgair/portfolio",
         json=payload,
         timeout=(3.0, None),  # (connect, read)
@@ -470,7 +620,7 @@ _load_scores = _load_portfolio  # backward-compat alias
 # ============================================================================
 def page_portfolio() -> None:
     portfolio = st.session_state.get("portfolio", _DEFAULT_PORTFOLIO)
-    st.title("Portfolio Overview — Org-AI-R Intelligence")
+    st.title("Portfolio Overview â€” Org-AI-R Intelligence")
     st.caption(f"Showing {len(portfolio)} selected companies.")
 
     # Sidebar: fund_id input
@@ -497,7 +647,7 @@ def page_portfolio() -> None:
 
     st.markdown("---")
     st.markdown("### V^R vs H^R Quadrant Analysis")
-    st.caption("Bubble size = Org-AI-R · Dashed lines at threshold 60")
+    st.caption("Bubble size = Org-AI-R Â· Dashed lines at threshold 60")
 
     if not scored.empty:
         fig = px.scatter(
@@ -552,7 +702,7 @@ def page_evidence() -> None:
 
     selected = st.sidebar.selectbox(
         "Company", tickers, index=idx,
-        format_func=lambda t: f"{t} — {next((c['name'] for c in portfolio if c['ticker']==t), t)}",
+        format_func=lambda t: f"{t} â€” {next((c['name'] for c in portfolio if c['ticker']==t), t)}",
         key="evidence_ticker_select",
     )
     st.session_state["selected_ticker"] = selected
@@ -560,7 +710,7 @@ def page_evidence() -> None:
     # CS5 spec: fetch justifications first, then pass to panel
     # Uses session_state cache to avoid re-fetching on every rerun
     cache_key = f"justifications_{selected}"
-    justifications = st.session_state.get(cache_key)  # None on first load → shows generate UI
+    justifications = st.session_state.get(cache_key)  # None on first load â†’ shows generate UI
     render_company_evidence_panel(selected, justifications)
 
 
@@ -570,7 +720,7 @@ def page_evidence() -> None:
 def page_workflow() -> None:
     st.title("Agentic Due-Diligence Workflow")
     st.caption(
-        "Runs the full LangGraph supervisor → specialist agents pipeline. "
+        "Runs the full LangGraph supervisor â†’ specialist agents pipeline. "
         "Triggers HITL approval automatically when thresholds are exceeded."
     )
 
@@ -582,7 +732,7 @@ def page_workflow() -> None:
     with col_sel:
         ticker = st.selectbox(
             "Company", tickers,
-            format_func=lambda t: f"{t} — {next((c['name'] for c in portfolio if c['ticker']==t), t)}",
+            format_func=lambda t: f"{t} â€” {next((c['name'] for c in portfolio if c['ticker']==t), t)}",
             index=tickers.index(default_wf) if default_wf in tickers else 0,
             key="workflow_ticker_select",
         )
@@ -704,18 +854,18 @@ def _run_workflow(ticker: str, assessment_type: str) -> None:
 
 def _show_result(result: dict) -> None:
     st.markdown("---")
-    st.markdown(f"### Results — **{result['ticker']}** ({result['assessment_type']})")
+    st.markdown(f"### Results â€” **{result['ticker']}** ({result['assessment_type']})")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Org-AI-R",    f"{result['org_air']:.2f}")
     c2.metric("V^R",         f"{result['vr_score']:.2f}")
     c3.metric("H^R",         f"{result['hr_score']:.2f}")
-    c4.metric("HITL Status", result["approval_status"] or "—")
+    c4.metric("HITL Status", result["approval_status"] or "â€”")
     c5.metric("Messages",    result["messages_count"])
     if result.get("delta_air") is not None:
         st.markdown("#### Value Creation Plan")
         vc1, vc2 = st.columns(2)
         vc1.metric("Delta AI-R",      f"{result['delta_air']:.4f}")
-        vc2.metric("Risk-Adj EBITDA", str(result.get("risk_adjusted", "—")))
+        vc2.metric("Risk-Adj EBITDA", str(result.get("risk_adjusted", "â€”")))
     if result.get("narrative"):
         with st.expander("IC Narrative", expanded=True):
             st.write(result["narrative"])
@@ -731,7 +881,7 @@ def _show_result(result: dict) -> None:
 # ============================================================================
 @st.cache_data(ttl=120)
 def _load_history(ticker: str, days: int = 365) -> dict:
-    r = requests.get(
+    r = _http().get(
         f"{BASE_URL}/api/v1/history/{ticker}",
         params={"days": days},
         timeout=(3.0, None),
@@ -743,7 +893,7 @@ def _load_history(ticker: str, days: int = 365) -> dict:
 
 def page_history() -> None:
     st.title("Assessment History")
-    st.caption("Task 9.4 — snapshots captured during DD runs.")
+    st.caption("Task 9.4 â€” snapshots captured during DD runs.")
 
     portfolio = st.session_state.get("portfolio", _DEFAULT_PORTFOLIO)
     tickers = [co["ticker"] for co in portfolio]
@@ -792,21 +942,22 @@ def page_history() -> None:
 
 
 # ============================================================================
-# Navigation — called before any rendering to suppress Streamlit's
+# Navigation â€” called before any rendering to suppress Streamlit's
 # auto-discovery of other .py files in the same directory.
 # ============================================================================
+
 pg = st.navigation(
     {
         "CS5 Agentic Portfolio": [
-            st.Page(page_portfolio, title="Portfolio Overview", icon="📊", default=True),
-            st.Page(page_evidence,  title="Evidence Analysis",  icon="🔍"),
-            st.Page(page_workflow,  title="Agentic Workflow",   icon="🤖"),
-            st.Page(page_history,   title="History",            icon="🕒"),
+            st.Page(page_portfolio, title="Portfolio Overview", icon="ðŸ“Š", default=True),
+            st.Page(page_evidence,  title="Evidence Analysis",  icon="ðŸ”"),
+            st.Page(page_workflow,  title="Agentic Workflow",   icon="ðŸ¤–"),
+            st.Page(page_history,   title="History",            icon="ðŸ•’"),
         ]
     }
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# â”€â”€ CSS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("""
 <style>
 .stButton > button[kind="primary"],button[kind="primary"] {
@@ -830,7 +981,7 @@ footer { visibility:hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sidebar extra content ─────────────────────────────────────────────────────
+# â”€â”€ Sidebar extra content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 with st.sidebar:
     st.markdown("""
     <div style="display:flex;align-items:center;gap:10px;padding-bottom:14px;
@@ -840,7 +991,7 @@ with st.sidebar:
                   font-size:14px;font-weight:700;color:#fff;flex-shrink:0;">PE</div>
       <div>
         <div style="font-size:16px;font-weight:700;">OrgAIR Platform</div>
-        <div style="font-size:12px;opacity:0.55;">CS5 · Agentic Intelligence</div>
+        <div style="font-size:12px;opacity:0.55;">CS5 Â· Agentic Intelligence</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -848,11 +999,11 @@ with st.sidebar:
                 'letter-spacing:0.06em;">Portfolio Companies</span>',
                 unsafe_allow_html=True)
     for co in st.session_state.get("portfolio", _DEFAULT_PORTFOLIO):
-        st.caption(f"{co['ticker']} — {co['name']}")
+        st.caption(f"{co['ticker']} â€” {co['name']}")
     st.divider()
     if st.button("Refresh Data", key="btn_refresh", use_container_width=True, type="secondary"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("PE Org-AI-R Platform · CS5")
+    st.caption("PE Org-AI-R Platform Â· CS5")
 
 pg.run()
