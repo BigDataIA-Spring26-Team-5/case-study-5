@@ -12,30 +12,11 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Historical entry prices at time of PE acquisition ($USD)
-ENTRY_PRICES: Dict[str, float] = {
-    "NVDA": 495.0,
-    "JPM": 172.0,
-    "WMT": 58.0,
-    "GE": 110.0,
-    "DG": 148.0,
-}
-
-# Default entry Org-AI-R scores at acquisition
-DEFAULT_ENTRY_ORG_AIR: Dict[str, float] = {
-    "NVDA": 62.0,
-    "JPM": 51.0,
-    "WMT": 43.0,
-    "GE": 45.0,
-    "DG": 38.0,
-}
-
-
 @dataclass
 class InvestmentROI:
     """ROI projection for a single portfolio company."""
     ticker: str
-    entry_price: float
+    entry_price: Optional[float]
     entry_org_air: float
     current_org_air: float
     air_improvement: float
@@ -66,18 +47,19 @@ class InvestmentTracker:
         ticker: str,
         current_org_air: float,
         entry_org_air: Optional[float] = None,
+        entry_price: Optional[float] = None,
     ) -> InvestmentROI:
         """Compute ROI projection for a single company.
 
         Args:
             ticker: Portfolio company ticker
             current_org_air: Latest Org-AI-R score
-            entry_org_air: Score at acquisition (defaults to DEFAULT_ENTRY_ORG_AIR)
+            entry_org_air: Score at acquisition/entry (if omitted, uses current_org_air so improvement=0)
+            entry_price: Optional entry price (not required for ROI estimate)
         """
-        if entry_org_air is None:
-            entry_org_air = DEFAULT_ENTRY_ORG_AIR.get(ticker, 45.0)
-
-        improvement = current_org_air - entry_org_air
+        ticker = (ticker or "").upper().strip()
+        baseline = float(entry_org_air) if entry_org_air is not None else float(current_org_air or 0.0)
+        improvement = float(current_org_air or 0.0) - baseline
         revenue_lift = improvement * 0.8
         ebitda_lift = improvement * 0.3
         multiple_expansion = improvement * 0.05
@@ -90,8 +72,8 @@ class InvestmentTracker:
 
         return InvestmentROI(
             ticker=ticker,
-            entry_price=ENTRY_PRICES.get(ticker, 100.0),
-            entry_org_air=round(entry_org_air, 2),
+            entry_price=float(entry_price) if entry_price is not None else None,
+            entry_org_air=round(baseline, 2),
             current_org_air=round(current_org_air, 2),
             air_improvement=round(improvement, 2),
             projected_revenue_lift_pct=round(revenue_lift, 2),
@@ -109,10 +91,7 @@ class InvestmentTracker:
         Args:
             scores: Dict[ticker, current_org_air]
         """
-        results: Dict[str, InvestmentROI] = {
-            ticker: self.compute_roi(ticker, score)
-            for ticker, score in scores.items()
-        }
+        results: Dict[str, InvestmentROI] = {ticker: self.compute_roi(ticker, score) for ticker, score in scores.items()}
         avg_roi = (
             sum(r.roi_estimate_pct for r in results.values()) / len(results)
             if results else 0.0
