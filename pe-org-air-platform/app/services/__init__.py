@@ -8,9 +8,20 @@ Subdirectory layout rule:
                     their own namespace (e.g. signals/, retrieval/, llm/).
 """
 
-from app.services.cache import get_cache
-from app.services.redis_cache import RedisCache
-from app.services.s3_storage import get_s3_service
+# NOTE:
+# Keep this package import-light. Some entrypoints (e.g. the MCP server) import
+# modules under `app.services.*` but should not require Redis/S3 to be configured
+# just to import the package.
+
+
+def get_cache():
+    from app.services.cache import get_cache as _get_cache
+    return _get_cache()
+
+
+def get_s3_service():
+    from app.services.s3_storage import get_s3_service as _get_s3_service
+    return _get_s3_service()
 
 
 def get_snowflake_connection():
@@ -65,6 +76,13 @@ def get_patent_signal_service():
     """Lazy import to avoid circular dependency."""
     from app.services.signals.patent_signal_service import get_patent_signal_service as _get
     return _get()
+
+
+def __getattr__(name: str):
+    if name == "RedisCache":
+        from app.services.redis_cache import RedisCache
+        return RedisCache
+    raise AttributeError(name)
 
 
 
