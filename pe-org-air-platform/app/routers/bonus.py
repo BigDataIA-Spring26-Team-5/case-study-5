@@ -58,6 +58,9 @@ async def compute_roi(
     entry_org_air: Optional[float] = Query(
         None, description="Optional override for entry Org-AI-R score"
     ),
+    entry_price: Optional[float] = Query(
+        None, description="Optional override for entry price (not required for ROI estimate)"
+    ),
     composite_repo=Depends(get_composite_scoring_repository),
     snapshot_repo=Depends(get_assessment_snapshot_repository),
 ):
@@ -79,7 +82,12 @@ async def compute_roi(
         except Exception:
             entry = None
 
-    roi = investment_tracker.compute_roi(ticker_u, current_org_air=current_org_air, entry_org_air=entry)
+    roi = investment_tracker.compute_roi(
+        ticker_u,
+        current_org_air=current_org_air,
+        entry_org_air=entry,
+        entry_price=entry_price,
+    )
     return roi.to_dict()
 
 
@@ -99,10 +107,15 @@ async def recall_memory(
     return payload
 
 
-@router.post("/reports/ic-memo/{ticker}", summary="Generate IC memo (.pdf) for a company")
+@router.post("/reports/ic-memo/{ticker}", summary="Generate IC memo (.docx) for a company")
 async def generate_ic_memo(
     ticker: str,
     target_org_air: float = Query(85.0, description="Target Org-AI-R for gap analysis / value creation"),
+    format: str = Query(
+        "docx",
+        description="Output format: docx (recommended), pdf, or txt",
+        pattern="^(docx|pdf|txt)$",
+    ),
     persist: bool = Query(
         True,
         description=(
@@ -152,9 +165,11 @@ async def generate_ic_memo(
         h_r_score=float(scoring_result["hr_score"] or 0.0),
     )
 
+    fmt = (format or "docx").lower().strip()
+    ext = "docx" if fmt not in ("pdf", "txt") else fmt
     out_path = os.path.join(
         _reports_subdir("ic_memo"),
-        f"ic_memo_{ticker_u}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.pdf",
+        f"ic_memo_{ticker_u}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.{ext}",
     )
     path = ic_memo_generator.generate(
         company_id=ticker_u,
@@ -162,13 +177,21 @@ async def generate_ic_memo(
         gap_analysis=gap_analysis,
         ebitda_projection=ebitda_projection,
         output_path=out_path,
+        output_format=fmt,
     )
 
     if not persist:
         if background is None:
             background = BackgroundTasks()
         background.add_task(_safe_remove, path)
-    return FileResponse(path, filename=os.path.basename(path), background=background)
+    media_type = None
+    if path.lower().endswith(".docx"):
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif path.lower().endswith(".pdf"):
+        media_type = "application/pdf"
+    elif path.lower().endswith(".txt"):
+        media_type = "text/plain"
+    return FileResponse(path, filename=os.path.basename(path), background=background, media_type=media_type)
 
 
 @router.post("/reports/lp-letter/{fund_id}", summary="Generate LP letter (.pdf) for a fund")
