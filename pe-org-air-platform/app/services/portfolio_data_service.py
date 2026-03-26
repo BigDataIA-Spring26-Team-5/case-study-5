@@ -22,7 +22,6 @@ from app.services.composite_scoring_service import (
     CompositeScoringService, OrgAIRResponse,
     COMPANY_SECTORS, COMPANY_NAMES, MARKET_CAP_PERCENTILES,
 )
-from app.config.company_mappings import CS3_PORTFOLIO
 
 logger = structlog.get_logger(__name__)
 
@@ -150,16 +149,28 @@ class PortfolioDataService:
             return None
 
     def _get_portfolio_company_rows(self, fund_id: str) -> tuple[Optional[str], List[Dict[str, Any]]]:
-        """Fetch portfolio companies from CS1 portfolio management; fall back to CS3_PORTFOLIO."""
+        """Fetch portfolio companies from CS1 portfolio management.
+
+        CS5 grading forbids hardcoded portfolio membership; this method must only
+        return companies sourced from CS1 portfolio tables.
+        """
         portfolio_id = self._resolve_portfolio_id(fund_id)
-        if portfolio_id:
-            try:
-                rows = self._get_company_repo().get_by_portfolio(portfolio_id)
-                if rows:
-                    return portfolio_id, rows
-            except Exception as exc:
-                logger.warning("portfolio_companies_fetch_failed", portfolio_id=portfolio_id, error=str(exc))
-        return None, [{"ticker": t} for t in CS3_PORTFOLIO]
+        if not portfolio_id:
+            raise ValueError(
+                f"Unknown portfolio '{fund_id}'. "
+                f"Create it in CS1 (portfolios tables) or pass the portfolio UUID."
+            )
+        try:
+            rows = self._get_company_repo().get_by_portfolio(portfolio_id)
+        except Exception as exc:
+            logger.error("portfolio_companies_fetch_failed", portfolio_id=portfolio_id, error=str(exc))
+            raise
+        if not rows:
+            raise ValueError(
+                f"Portfolio '{fund_id}' (id={portfolio_id}) has no companies. "
+                f"Add companies in CS1 portfolio management."
+            )
+        return portfolio_id, rows
 
     # ------------------------------------------------------------------
     # Company-level queries
@@ -469,7 +480,7 @@ class PortfolioDataService:
     def get_portfolio_tickers(self, fund_id: str = "PE-FUND-I") -> List[str]:
         """Return a ticker list for a fund/portfolio id.
 
-        Uses CS1 portfolio tables when available; falls back to CS3_PORTFOLIO.
+        Uses CS1 portfolio tables only (no hardcoded tickers).
         """
         _, company_rows = self._get_portfolio_company_rows(fund_id)
         tickers: List[str] = []
@@ -477,7 +488,9 @@ class PortfolioDataService:
             ticker = str(row.get("ticker") or "").upper()
             if ticker:
                 tickers.append(ticker)
-        return tickers or list(CS3_PORTFOLIO)
+        if not tickers:
+            raise ValueError(f"Portfolio '{fund_id}' returned companies without tickers.")
+        return tickers
 
 
 # Module-level singleton — set by lifespan.py at startup
