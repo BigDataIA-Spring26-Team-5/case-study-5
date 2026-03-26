@@ -295,6 +295,50 @@ class CompanyRepository(BaseRepository):
             finally:
                 cur.close()
 
+    def set_portfolio_companies(self, portfolio_id: str, company_ids: List[str]) -> None:
+        """Replace portfolio membership with the provided company UUIDs."""
+        unique_ids = []
+        seen = set()
+        for cid in company_ids or []:
+            s = str(cid)
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            unique_ids.append(s)
+
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "DELETE FROM cs4_portfolio_companies WHERE portfolio_id = %s",
+                    (portfolio_id,),
+                )
+                for cid in unique_ids:
+                    cur.execute(
+                        "INSERT INTO cs4_portfolio_companies (portfolio_id, company_id) VALUES (%s, %s)",
+                        (portfolio_id, cid),
+                    )
+                conn.commit()
+            finally:
+                cur.close()
+
+    def list_portfolios(self, limit: int = 200) -> List[Dict]:
+        """List portfolios from cs4_portfolios (most recent first)."""
+        sql = """
+        SELECT id, name, fund_vintage, created_at
+        FROM cs4_portfolios
+        ORDER BY created_at DESC
+        LIMIT %s
+        """
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (int(limit),))
+                columns = [col[0].lower() for col in cur.description]
+                return [dict(zip(columns, row)) for row in cur.fetchall()]
+            finally:
+                cur.close()
+
     def find_portfolio_id_by_name(self, name: str) -> Optional[str]:
         """Resolve portfolio UUID by exact name match (case-insensitive)."""
         sql = "SELECT id FROM cs4_portfolios WHERE LOWER(name) = LOWER(%s) LIMIT 1"
