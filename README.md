@@ -13,10 +13,9 @@ Multi-agent due diligence platform that extends CS1–CS4's scoring and RAG pipe
 
 | Resource | URL |
 |----------|-----|
-| **GitHub Repository** | [PE_OrgAIR_Platform_AgenticDD](https://github.com/BigDataIA-Spring26-Team-5/PE_OrgAIR_Platform_AgenticDD.git) |
-| **Project Codelabs** | [CS5 Walkthrough](https://codelabs-preview.appspot.com/?file_id=16_uZuNqImUhPztCSOeEnVWznIwW3TT5R477rsmvLrSA#2) |
-| **Demo Video** | [SharePoint Video](https://northeastern-my.sharepoint.com/) |
-| **Streamlit Deployed UI** | [pe-org-air-platform.streamlit.app](https://pe-org-air-platform.streamlit.app/) |
+| **GitHub Repository** | [PE_OrgAIR_Platform_Agentic_Intelligence](https://github.com/BigDataIA-Spring26-Team-5/PE-OrgAIR-Platform-Agentic-Portfolio-Intelligence) |
+| **Project Codelabs** | [CS5 Walkthrough](https://codelabs-preview.appspot.com/?file_id=1Xbaf3coFFKOvyNASjPFO4bATrMhH-dDIJPSaQaHsngY#0)|
+| **Demo Video** | [SharePoint Video](https://northeastern-my.sharepoint.com/personal/bukka_b_northeastern_edu/_layouts/15/stream.aspx?id=%2Fpersonal%2Fbukka%5Fb%5Fnortheastern%5Fedu%2FDocuments%2FRecordings%2FCall%20with%20Aqeel%20and%201%20other%2D20260327%5F152028%2DMeeting%20Recording%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Ec4496388%2Dd93c%2D4840%2Daf9c%2D00c66def3994&isDarkMode=true)|
 |**Architecture Diagram**|[CS5 Architecture Diagram](https://mermaid.ai/d/f7139255-cc68-4b7c-988d-a5ecbfafba1a)|
 
 ---
@@ -653,7 +652,7 @@ All LLM calls route through LiteLLM with a **$5/day budget** enforced by `ModelR
 
 ## 11. Known Limitations
 
-1. **Composite scoring limited to 5 companies.** The scoring calibration dicts (`EXPECTED_TC_VR_RANGES`, `MARKET_CAP_PERCENTILES`, `COMPANY_SECTORS`) are hardcoded for NVDA, JPM, WMT, GE, DG. Scoring arbitrary tickers produces uncalibrated results.
+1. **Composite scoring limited to 7 companies.** The scoring calibration dicts (`EXPECTED_TC_VR_RANGES`, `MARKET_CAP_PERCENTILES`, `COMPANY_SECTORS`) are hardcoded for NVDA, CRM, GOOGL, JPM, WMT, ADP, UNH. Scoring arbitrary tickers produces uncalibrated results.
 
 2. **MemorySaver is in-memory only.** Workflow checkpoints are lost on service restart. Paused HITL workflows cannot be resumed after a restart. Production deployment would need a persistent checkpointer.
 
