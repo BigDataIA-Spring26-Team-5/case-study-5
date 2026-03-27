@@ -873,6 +873,7 @@ def page_workflow():
             st.error(str(e))
             _log(f'<span style="color:#dc2626">[exception] {e}</span>')
         progress_ph.empty()
+        st.rerun()  # Clean rerun so only the result section renders
 
     result = st.session_state.get("workflow_result")
     if not result or result.get("ticker", "").upper() != ticker.upper():
@@ -886,45 +887,48 @@ def page_workflow():
 
     # ── HITL banner (matches mockup: icon + text + buttons inline) ───────────
     if hitl:
+        reason = result.get("approval_reason") or f"Org-AI-R score {org_air:.1f} outside normal range [40, 80]."
         st.markdown(f'''<div class="hitl-banner">
           <span class="hitl-icon">&#9888;</span>
-          <span class="hitl-text"><strong>HITL approval required:</strong> Org-AI-R score {org_air:.1f} — outside normal range [40, 80]. Supervisor routed to hitl_approval node.</span>
+          <span class="hitl-text"><strong>HITL approval required:</strong> {reason} Supervisor routed to hitl_approval node.</span>
         </div>''', unsafe_allow_html=True)
         h1, h2, h3 = st.columns([6, 1, 1])
         with h2:
             if st.button("Approve", key="hitl_approve", type="primary", use_container_width=True):
-                try:
-                    resp = _post(f"/api/v1/dd/approve/{result.get('thread_id','')}", json={"decision": "approved", "approved_by": "analyst"}, timeout=120)
-                    if resp.ok:
-                        st.session_state["workflow_result"] = resp.json()
-                        st.success("Approved - workflow resumed")
-                        st.rerun()
-                    elif resp.status_code == 409:
-                        st.session_state["workflow_result"]["requires_approval"] = False
-                        st.session_state["workflow_result"]["approval_status"] = "approved"
-                        st.success("Approved (workflow already completed)")
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {resp.text[:200]}")
-                except Exception as e:
-                    st.error(str(e))
+                with st.spinner("Approving and resuming workflow..."):
+                    try:
+                        resp = _post(f"/api/v1/dd/approve/{result.get('thread_id','')}", json={"decision": "approved", "approved_by": "analyst"}, timeout=300)
+                        if resp.ok:
+                            st.session_state["workflow_result"] = resp.json()
+                            st.success("Approved - workflow completed")
+                            st.rerun()
+                        elif resp.status_code == 409:
+                            # Checkpoint lost — re-run DD to get complete result
+                            re = _post(f"/api/v1/dd/run/{ticker}",
+                                       json={"assessment_type": atype, "requested_by": "cs5_dashboard"},
+                                       timeout=300)
+                            if re.ok:
+                                full = re.json()
+                                full["approval_status"] = "approved"
+                                full["requires_approval"] = False
+                                st.session_state["workflow_result"] = full
+                                st.success("Approved - full workflow re-executed")
+                            else:
+                                st.session_state["workflow_result"]["requires_approval"] = False
+                                st.session_state["workflow_result"]["approval_status"] = "approved"
+                                st.success("Approved")
+                            st.rerun()
+                        else:
+                            st.error(f"Error: {resp.text[:200]}")
+                    except Exception as e:
+                        st.error(str(e))
         with h3:
             if st.button("Reject", key="hitl_reject", use_container_width=True):
-                try:
-                    resp = _post(f"/api/v1/dd/approve/{result.get('thread_id','')}", json={"decision": "rejected", "approved_by": "analyst"}, timeout=120)
-                    if resp.ok:
-                        st.session_state["workflow_result"] = resp.json()
-                        st.warning("Rejected - workflow aborted")
-                        st.rerun()
-                    elif resp.status_code == 409:
-                        st.session_state["workflow_result"]["requires_approval"] = False
-                        st.session_state["workflow_result"]["approval_status"] = "rejected"
-                        st.warning("Rejected (workflow already completed)")
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {resp.text[:200]}")
-                except Exception as e:
-                    st.error(str(e))
+                st.session_state["workflow_result"]["requires_approval"] = False
+                st.session_state["workflow_result"]["approval_status"] = "rejected"
+                st.session_state["workflow_result"]["error"] = "Workflow aborted: HITL approval rejected."
+                st.warning("Rejected - workflow aborted")
+                st.rerun()
 
     # ── Agent flow pipeline ──────────────────────────────────────────────────
     st.markdown("#### Workflow progress — create_due_diligence_graph()")
@@ -1355,25 +1359,63 @@ def _save_local(data: bytes, filename: str) -> str:
 
 
 def _render_docx_preview(data: bytes) -> None:
-    """Extract paragraphs from a .docx and render inline as styled HTML."""
+    """Extract paragraphs AND tables from a .docx and render inline as styled HTML."""
     try:
         from docx import Document
         doc = Document(io.BytesIO(data))
         html_parts = []
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if not text:
-                html_parts.append("<br>")
-                continue
-            style = para.style.name.lower() if para.style else ""
-            if "heading" in style or "title" in style:
-                html_parts.append(f'<div style="font-size:16px;font-weight:700;margin:14px 0 6px;color:#1a1a1e">{text}</div>')
-            elif "subtitle" in style:
-                html_parts.append(f'<div style="font-size:14px;color:#6b6a65;margin-bottom:8px">{text}</div>')
-            else:
-                html_parts.append(f'<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:4px">{text}</div>')
+
+        # Build an ordered list of all body elements (paragraphs + tables)
+        body = doc.element.body
+        for child in body:
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if tag == "p":
+                # Paragraph
+                text = child.text or ""
+                # Also get text from runs
+                for run in child.iter():
+                    if run.text and run != child:
+                        text += run.text
+                text = text.strip()
+                if not text:
+                    continue
+                # Detect heading by style
+                style_el = child.find(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pStyle")
+                style_val = style_el.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val", "").lower() if style_el is not None else ""
+                if "heading" in style_val:
+                    level = "18px" if "1" in style_val else "16px"
+                    html_parts.append(f'<div style="font-size:{level};font-weight:700;margin:14px 0 6px;color:#1a1a1e">{text}</div>')
+                elif "list" in style_val:
+                    html_parts.append(f'<div style="font-size:14px;color:#4b4a45;padding-left:20px;margin-bottom:2px">&#8226; {text}</div>')
+                else:
+                    html_parts.append(f'<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:4px">{text}</div>')
+            elif tag == "tbl":
+                # Table
+                rows_html = []
+                for tr in child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tr"):
+                    cells = []
+                    for tc in tr.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tc"):
+                        cell_text = ""
+                        for p in tc.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
+                            for r in p.iter():
+                                if r.text:
+                                    cell_text += r.text
+                        cells.append(cell_text.strip())
+                    rows_html.append(cells)
+                if rows_html:
+                    tbl_html = '<table style="width:100%;border-collapse:collapse;font-size:13px;margin:8px 0">'
+                    for i, row in enumerate(rows_html):
+                        tag_name = "th" if i == 0 else "td"
+                        style = "background:#f0f0f0;font-weight:600;" if i == 0 else ""
+                        tbl_html += "<tr>" + "".join(
+                            f'<{tag_name} style="{style}padding:6px 10px;border:1px solid #e0e0e0">{c}</{tag_name}>'
+                            for c in row
+                        ) + "</tr>"
+                    tbl_html += "</table>"
+                    html_parts.append(tbl_html)
+
         st.markdown(
-            f'''<div class="card" style="max-height:500px;overflow-y:auto;background:#fafaf8;border:1px dashed #e8e7e3">
+            f'''<div class="card" style="max-height:500px;overflow-y:auto;background:#fafaf8;border:1px dashed #e8e7e3;padding:16px">
               {"".join(html_parts)}
             </div>''',
             unsafe_allow_html=True,

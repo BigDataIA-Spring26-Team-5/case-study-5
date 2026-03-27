@@ -157,13 +157,65 @@ async def generate_ic_memo(
     except Exception:
         scoring_result["dimension_scores"] = {}
 
-    gap_analysis = portfolio_svc.run_gap_analysis(ticker_u, float(target_org_air))
-    ebitda_projection = portfolio_svc.project_ebitda_impact(
+    # If dimension scores empty, try direct repo
+    if not scoring_result["dimension_scores"]:
+        try:
+            from app.repositories.scoring_repository import ScoringRepository
+            direct_repo = ScoringRepository()
+            dims = direct_repo.get_dimension_scores(ticker_u)
+            scoring_result["dimension_scores"] = {
+                d.get("dimension"): float(d.get("score") or 0.0) for d in dims
+            }
+        except Exception:
+            pass
+
+    # Gap analysis — use GapAnalyzer directly with dimension scores
+    dim_scores = scoring_result.get("dimension_scores", {})
+    current_air = float(scoring_result.get("org_air") or 0)
+    if dim_scores:
+        try:
+            from app.services.value_creation.gap_analysis import GapAnalyzer
+            gap_result = GapAnalyzer().analyze(
+                company_id=ticker_u,
+                dimension_scores=dim_scores,
+                current_org_air=current_air,
+                target_org_air=float(target_org_air),
+            )
+            gap_analysis = gap_result.to_dict() if hasattr(gap_result, "to_dict") else gap_result
+        except Exception:
+            gap_analysis = portfolio_svc.run_gap_analysis(ticker_u, float(target_org_air))
+    else:
+        gap_analysis = portfolio_svc.run_gap_analysis(ticker_u, float(target_org_air))
+
+    # Use entry score from history for EBITDA projection (shows improvement achieved)
+    entry_score = float(scoring_result["org_air"] or 0.0)
+    try:
+        from app.repositories.assessment_snapshot_repository import AssessmentSnapshotRepository
+        snap_repo = AssessmentSnapshotRepository()
+        snaps = snap_repo.list_snapshots(ticker=ticker_u, days=3650)
+        if snaps:
+            entry_score = float(snaps[0].get("org_air") or entry_score)
+    except Exception:
+        pass
+
+    ebitda_raw = portfolio_svc.project_ebitda_impact(
         company_id=ticker_u,
-        entry_score=float(scoring_result["org_air"] or 0.0),
+        entry_score=entry_score,
         target_score=float(target_org_air),
         h_r_score=float(scoring_result["hr_score"] or 0.0),
     )
+    # Map EBITDA calculator fields to what IC memo generator expects
+    ebitda_projection = {
+        **ebitda_raw,
+        "risk_adjusted": f"{ebitda_raw.get('adjusted_net_impact_pct', 0):.2f}%",
+        "delta_air": f"{ebitda_raw.get('score_improvement', 0):.1f}",
+        "scenarios": {
+            "conservative": f"{ebitda_raw.get('net_impact_pct', 0) * 0.6:.2f}%",
+            "base": f"{ebitda_raw.get('net_impact_pct', 0):.2f}%",
+            "optimistic": f"{ebitda_raw.get('ebitda_impact_pct', 0):.2f}%",
+        },
+        "requires_approval": ebitda_raw.get('adjusted_net_impact_pct', 0) > 5.0,
+    }
 
     fmt = (format or "docx").lower().strip()
     ext = "docx" if fmt not in ("pdf", "txt") else fmt
