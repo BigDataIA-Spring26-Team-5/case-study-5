@@ -1,74 +1,131 @@
 
-  ---
-  Architectural Diagram
-
   ╔══════════════════════════════════════════════════════════════════════════════════╗
-  ║                        PE ORG-AI-R PLATFORM PIPELINE                             ║
+  ║                    PE ORG-AI-R PLATFORM — ARCHITECTURE SUMMARY                   ║
   ╚══════════════════════════════════════════════════════════════════════════════════╝
+
+  Private equity portfolio analysis platform (CS1-CS5) evaluating companies against
+  a 7-dimension AI Readiness (V^R) framework to produce Org-AI-R scores for
+  Investment Committee decisions.
+
+  CS3 Scoring Portfolio:   NVDA | JPM | WMT | GE | DG  (5 companies)
+  CS5 Dashboard Portfolio: NVDA | CRM | GOOGL | JPM | WMT | ADP | UNH  (7 companies)
+
+  ━━━━━━━━━━━━━━━━━━━━━━━ PIPELINE OVERVIEW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CS1  Company Registration + Groq Metadata Enrichment
+   ↓
+  CS2  SEC Filing Collection → Parsing → Chunking → Signal Scoring
+   ↓
+  CS3  7-Dimension V^R Rubric Scoring → TC → H^R → Position Factor → Org-AI-R
+   ↓
+  CS4  ChromaDB RAG Indexing → Hybrid Retrieval → Chatbot → IC Prep Package
+   ↓
+  CS5  LangGraph Multi-Agent DD Workflow → HITL Approval → Value Creation → Reporting
+
+  Layer flow:  Routers → Services → Pipelines / Repositories → Data Stores
+
+  ━━━━━━━━━━━━━━━━━━━━━━━ CS1: COMPANY REGISTRATION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │  POST /api/v1/companies  { ticker, name }                                   │
+  │                                                                              │
+  │  1. Create company record ──────────────────────────► Snowflake: companies   │
+  │                                                                              │
+  │  2. Background: Groq metadata enrichment                                     │
+  │     └─ sector, revenue_estimate, employee_count ──► Snowflake: companies     │
+  │                                                                              │
+  │  3. Background: Create portfolio entry ────────────► Snowflake: portfolio    │
+  └──────────────────────────────────────────────────────────────────────────────┘
 
   ━━━━━━━━━━━━━━━━━━━━━━ CS2: SIGNAL COLLECTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     EXTERNAL SOURCES                   SIGNAL SERVICES                  OUTPUTS
     ─────────────────                  ───────────────                  ───────
-    LinkedIn / Indeed                ┌─ job_signals.py ──────────────► technology_hiring   [0-100]
+    LinkedIn / Indeed                ┌─ job_signal_service.py ─────────► technology_hiring   [0-100]
     Glassdoor                        │
-    PatentsView / USPTO ─────────────┤─ patent_signals.py ───────────► innovation_activity [0-100]
+    PatentsView / USPTO ─────────────┤─ patent_signal_service.py ──────► innovation_activity [0-100]
                                      │
-    BuiltWith / Wappalyzer ──────────┤─ tech_signals.py ─────────────► digital_presence    [0-100]
+    BuiltWith / Wappalyzer ──────────┤─ tech_signal_service.py ────────► digital_presence    [0-100]
     Groq (subdomains)                │
                                      │
-    SEC DEF-14A (proxy stmt) ────────┤─ leadership_analyzer.py ──────► leadership_signals  [0-100]
+    SEC DEF-14A (proxy stmt) ────────┤─ leadership_service.py ─────────► leadership_signals  [0-100]
                                      │
-    SEC proxy (board bios) ──────────┤─ board_composition_service ───► board_composition   [0-100]
+    SEC proxy (board bios) ──────────┤─ board_composition_service.py ──► board_composition   [0-100]
                                      │
-    Glassdoor reviews (S3) ──────────┘─ culture_service ─────────────► culture             [0-100]
+    Glassdoor reviews (S3) ──────────┘─ culture_signal_service.py ─────► culture             [0-100]
 
                                              ▼
                                  Snowflake: external_signals
                                     company_signal_summaries
 
+  ┌─────────────────────┬───────────────────────────────┬───────────────────────────────────────────┐
+  │       Signal        │            Source             │             What it measures              │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ technology_hiring   │ JobSpy (LinkedIn/Indeed)      │ AI job ratio within tech postings         │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ innovation_activity │ PatentsView / USPTO           │ AI patent ratio + recency                 │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ digital_presence    │ BuiltWith + Wappalyzer + Groq │ AI tools in tech stack                    │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ leadership_signals  │ SEC DEF-14A proxy filings     │ Tech exec presence + AI strategy keywords │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ board_composition   │ SEC proxy (board bios)        │ Board-level tech expertise                │
+  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
+  │ culture             │ Glassdoor reviews (S3)        │ Culture indicators for AI readiness       │
+  └─────────────────────┴───────────────────────────────┴───────────────────────────────────────────┘
+
+  Each signal uses a weighted sub-scoring formula (ratio + volume + diversity components)
+  then persists to Snowflake.
+
+  All signal services live in app/services/signals/ (10 files including base class).
+
   ━━━━━━━━━━━━━━━━━━━━━━ CS3: DIMENSION SCORING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    SEC TEXT (from Snowflake chunks)
-    ────────────────────────────────
-    Item 1  (Business)  ──┐
-    Item 1A (Risk)      ──┤── rubric_scorer.py  ──► sec_item_1, sec_item_1a, sec_item_7
-    Item 7  (MD&A)      ──┘   [5-level rubrics, keyword matching]
+  Evidence-to-Dimension Mapping
+  ─────────────────────────────
+  The Evidence Mapper (evidence_mapper.py) implements the Table 1 Matrix: each of the
+  9 evidence sources (6 signals + 3 SEC section rubric scores) distributes its score
+  across the 7 V^R dimensions using primary/secondary weights.
 
-    ╔═══════════════════════════════════════════════════════╗
-    ║         EVIDENCE MAPPER (Table 1 Matrix)              ║
-    ║              evidence_mapper.py                       ║
-    ║                                                       ║
-    ║  9 sources × weights ──────────────────────────────►  ║
-    ║                                                       ║
-    ║  ┌─────────────────────┬──────────┬─────────────┐     ║
-    ║  │ Source              │ Primary  │ Weight      │     ║
-    ║  ├─────────────────────┼──────────┼─────────────┤     ║
-    ║  │ technology_hiring   │ talent   │ 0.70        │     ║
-    ║  │ innovation_activity │ tech_stk │ 0.50        │     ║
-    ║  │ digital_presence    │ data_inf │ 0.60        │     ║
-    ║  │ leadership_signals  │ leader   │ 0.60        │     ║
-    ║  │ sec_item_1          │ use_case │ 0.70        │     ║
-    ║  │ sec_item_1a         │ ai_gov   │ 0.80        │     ║
-    ║  │ sec_item_7          │ leader   │ 0.50        │     ║
-    ║  │ glassdoor_reviews   │ culture  │ 0.80        │     ║
-    ║  │ board_composition   │ ai_gov   │ 0.70        │     ║
-    ║  └─────────────────────┴──────────┴─────────────┘     ║
-    ╚═══════════════════════════════════════════════════════╝
+  The Rubric Scorer (rubric_scorer.py) processes raw SEC text (Items 1, 1A, 7)
+  through 5-level keyword-matching rubrics to produce 3 additional input scores.
 
-                      ▼   (each source also distributes to secondary dimensions)
+  ╔═══════════════════════════════════════════════════════╗
+  ║         EVIDENCE MAPPER (Table 1 Matrix)              ║
+  ║              evidence_mapper.py                       ║
+  ║                                                       ║
+  ║  9 sources × weights ──────────────────────────────►  ║
+  ║                                                       ║
+  ║  ┌─────────────────────┬──────────┬─────────────┐     ║
+  ║  │ Source              │ Primary  │ Weight      │     ║
+  ║  ├─────────────────────┼──────────┼─────────────┤     ║
+  ║  │ technology_hiring   │ talent   │ 0.70        │     ║
+  ║  │ innovation_activity │ tech_stk │ 0.50        │     ║
+  ║  │ digital_presence    │ data_inf │ 0.60        │     ║
+  ║  │ leadership_signals  │ leader   │ 0.60        │     ║
+  ║  │ sec_item_1          │ use_case │ 0.70        │     ║
+  ║  │ sec_item_1a         │ ai_gov   │ 0.80        │     ║
+  ║  │ sec_item_7          │ leader   │ 0.50        │     ║
+  ║  │ glassdoor_reviews   │ culture  │ 0.80        │     ║
+  ║  │ board_composition   │ ai_gov   │ 0.70        │     ║
+  ║  └─────────────────────┴──────────┴─────────────┘     ║
+  ╚═══════════════════════════════════════════════════════╝
 
-    7 DIMENSION SCORES [0-100]
-    ───────────────────────────────────────────────────────────────────────────
-    data_infrastructure  (w=0.18) ◄── digital_presence (0.60), innovation (0.20)
-    talent_skills        (w=0.17) ◄── technology_hiring (0.70)
-    ai_governance        (w=0.15) ◄── sec_item_1a (0.80), board_composition (0.70)
-    technology_stack     (w=0.15) ◄── innovation (0.50), digital_presence (0.40)
-    leadership_vision    (w=0.13) ◄── leadership_signals (0.60), sec_item_7 (0.50)
-    use_case_portfolio   (w=0.12) ◄── sec_item_1 (0.70), innovation (0.30)
-    culture_change       (w=0.10) ◄── glassdoor_reviews (0.80)
+                    ▼   (each source also distributes to secondary dimensions)
+
+  7 DIMENSION SCORES [0-100]
+  ───────────────────────────────────────────────────────────────────────────
+  data_infrastructure  (w=0.18) ◄── digital_presence (0.60), innovation (0.20)
+  talent_skills        (w=0.17) ◄── technology_hiring (0.70)
+  ai_governance        (w=0.15) ◄── sec_item_1a (0.80), board_composition (0.70)
+  technology_stack     (w=0.15) ◄── innovation (0.50), digital_presence (0.40)
+  leadership_vision    (w=0.13) ◄── leadership_signals (0.60), sec_item_7 (0.50)
+  use_case_portfolio   (w=0.12) ◄── sec_item_1 (0.70), innovation (0.30)
+  culture_change       (w=0.10) ◄── glassdoor_reviews (0.80)
 
   ━━━━━━━━━━━━━━━━━━━━━ CS3: COMPOSITE SCORING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  6-step scoring cascade (all calculators in app/scoring/):
 
     ┌─────────────────────────────────────────────────────────────────────────────┐
     │  STEP 1: Talent Concentration (TC)          talent_concentration.py         │
@@ -128,77 +185,14 @@
                             │    Snowflake      S3 JSON        │
                             └─────────────────────────────────┘
 
-  ---
-  How It Works — Summary
-
-  Phase 1 — Signal Collection (CS2)
-
-  Six parallel background tasks hit external APIs and produce normalized [0-100] scores with confidence values:
-
-  ┌─────────────────────┬───────────────────────────────┬───────────────────────────────────────────┐
-  │       Signal        │            Source             │             What it measures              │
-  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
-  │ technology_hiring   │ JobSpy (LinkedIn/Indeed)      │ AI job ratio within tech postings         │
-  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
-  │ innovation_activity │ PatentsView / USPTO           │ AI patent ratio + recency                 │
-  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
-  │ digital_presence    │ BuiltWith + Wappalyzer + Groq │ AI tools in tech stack                    │
-  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
-  │ leadership_signals  │ SEC DEF-14A proxy filings     │ Tech exec presence + AI strategy keywords │
-  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
-  │ board_composition   │ SEC proxy (board bios)        │ Board-level tech expertise                │
-  ├─────────────────────┼───────────────────────────────┼───────────────────────────────────────────┤
-  │ culture             │ Glassdoor reviews (S3)        │ Culture indicators for AI readiness       │
-  └─────────────────────┴───────────────────────────────┴───────────────────────────────────────────┘
-
-  Each signal uses a weighted sub-scoring formula (ratio + volume + diversity components) then persists to Snowflake.
-
-  ---
-  Phase 2 — Evidence-to-Dimension Mapping (CS3 early)
-
-  The Evidence Mapper (evidence_mapper.py) implements the Table 1 Matrix: each of the 9 evidence sources (6 signals + 3 SEC section rubric scores) distributes its score
-  across the 7 V^R dimensions using primary/secondary weights. For example, technology_hiring contributes 70% to talent_skills, 20% to technology_stack, 10% to
-  data_infrastructure.
-
-  The Rubric Scorer (rubric_scorer.py) processes raw SEC text (Items 1, 1A, 7) through 5-level keyword-matching rubrics to produce 3 additional input scores.
-
-  ---
-  Phase 3 — 7 Dimension Scores
-
-  After mapping, each company has 7 weighted dimension scores:
-
-  data_infrastructure (0.18) → talent_skills (0.17) → ai_governance (0.15) → technology_stack (0.15) → leadership_vision (0.13) → use_case_portfolio (0.12) →
-  culture_change (0.10)
-
-  ---
-  Phase 4 — Composite Scoring (6-step cascade)
-
-  1. TC — Talent Concentration: how distributed vs. siloed AI talent is (from job seniority mix + skill spread)
-  2. V^R — Venture Readiness: weighted average of 7 dimensions, penalized if TC is too concentrated or scores are too unbalanced (CV penalty)
-  3. PF — Position Factor: market cap percentile mapped to [-1, +1] competitive advantage
-  4. H^R — Human Readiness: sector baseline (tech=84, finance=68…) adjusted by PF
-  5. Synergy — how well V^R and H^R are aligned, amplified by sector timing factor
-  6. Org-AI-R — Final score: 0.88 × [0.60×V^R + 0.40×H^R] + 0.12×Synergy
-
-  The constants α=0.60, β=0.12 control how much internal readiness (V^R) vs. market position (H^R) vs. alignment synergy drives the final investment-grade score.
-
-  ---
-  Phase 5 — CS1: Company Registration
-
-  ┌──────────────────────────────────────────────────────────────────────────────┐
-  │  POST /api/v1/companies  { ticker, name }                                   │
-  │                                                                              │
-  │  1. Create company record ──────────────────────────► Snowflake: companies   │
-  │                                                                              │
-  │  2. Background: Groq metadata enrichment                                     │
-  │     └─ sector, revenue_estimate, employee_count ──► Snowflake: companies     │
-  │                                                                              │
-  │  3. Background: Create portfolio entry ────────────► Snowflake: portfolio    │
-  └──────────────────────────────────────────────────────────────────────────────┘
+  Constants: α=0.60 (V^R weight), β=0.12 (synergy weight)
+  The 6-step cascade lives in composite_scoring_service.py which orchestrates calls
+  to the individual calculator modules in app/scoring/.
 
   ━━━━━━━━━━━━━━━━━━━━━━━━ CS4: RAG & RETRIEVAL ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Phase 6 — Evidence Indexing & Hybrid Retrieval
+  Evidence Indexing
+  ─────────────────
 
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  POST /api/v1/rag/index/{ticker}                                             │
@@ -217,6 +211,9 @@
   │              └─ Multi-seed query approach (~500 doc limit)                    │
   └──────────────────────────────────────────────────────────────────────────────┘
 
+  Hybrid Retrieval
+  ────────────────
+
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  HybridRetriever (hybrid.py)                                                 │
   │                                                                              │
@@ -229,7 +226,8 @@
   │                                              RetrievedDocument list          │
   └──────────────────────────────────────────────────────────────────────────────┘
 
-  Phase 7 — Justification Generation
+  Justification Generation
+  ────────────────────────
 
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  GET /api/v1/rag/justify/{ticker}/{dimension}                                │
@@ -249,7 +247,9 @@
   │    └─ gaps_identified (next-level criteria)                                  │
   └──────────────────────────────────────────────────────────────────────────────┘
 
-  Guardrails:
+  Guardrails
+  ──────────
+
   ┌──────────────────────┬──────────────────────────────────────────────────────┐
   │  INPUT GUARDS         │  validate_ticker (regex, uppercase 1-10 chars)      │
   │  input_guards.py      │  validate_question (10-500 chars, injection detect) │
@@ -260,7 +260,8 @@
   │                       │  check_no_refusal (fallback for LLM refusals)      │
   └──────────────────────┴──────────────────────────────────────────────────────┘
 
-  Phase 8 — Chatbot & IC Prep
+  Chatbot & IC Prep
+  ─────────────────
 
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  GET /api/v1/rag/chatbot/{ticker}?q=...                                      │
@@ -284,7 +285,8 @@
 
   ━━━━━━━━━━━━━━━━━━━━ CS5: MULTI-AGENT DUE DILIGENCE ━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Phase 9 — LangGraph Agent Workflow
+  LangGraph Agent Workflow
+  ────────────────────────
 
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  POST /api/v1/dd/run/{ticker}                                                │
@@ -357,11 +359,19 @@
     │     └─ Store Mem0 semantic memory                                       │
     └─────────────────────────────────────────────────────────────────────────┘
 
+  Mem0 Semantic Memory (app/agents/memory.py)
+  ───────────────────────────────────────────
+  Optional cross-session recall for agents. Stores assessment summaries
+  (org_air, vr, hr scores + top gaps + narrative) keyed by company ticker.
+  Lazy-initializes via mem0ai library. Falls back to Groq/Anthropic for LLM
+  backend. Fully no-op if MEM0_API_KEY is not set.
+
   ━━━━━━━━━━━━━━━━━━━━━━━ CS5: MCP TOOL SERVER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   MCP stdio server (app/mcp/server.py) — 6 tools, 2 resources, 2 prompts
   Lazy init: expensive clients (Snowflake, ChromaDB) only on first tool call
 
+  Tools:
   ┌──────────────────────┬─────────────────────────────┬──────────────────────────────────────┐
   │       Tool           │          Source              │             Purpose                   │
   ├──────────────────────┼─────────────────────────────┼──────────────────────────────────────┤
@@ -382,6 +392,14 @@
   │ get_portfolio_       │ CS3_PORTFOLIO iteration     │ Fund-AI-R, per-company summary         │
   │   summary            │                             │                                       │
   └──────────────────────┴─────────────────────────────┴──────────────────────────────────────┘
+
+  Resources:
+    orgair://parameters/v2.0  — Scoring parameters (alpha, beta, dimension weights)
+    orgair://sectors           — Sector baselines and timing factors
+
+  Prompts:
+    due_diligence_assessment  — Full DD assessment prompt template
+    ic_meeting_prep           — IC meeting preparation prompt template
 
   MCPToolCaller (agents/specialists.py) mirrors MCP tool dispatch via HTTP
   ──► single source of truth for business logic
@@ -443,11 +461,15 @@
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  ICMemoGenerator (ic_memo.py)                                                │
   │                                                                              │
-  │  Generates IC memo as PDF (WeasyPrint) with .txt fallback                    │
+  │  Output format chain:                                                        │
+  │    1. .docx (python-docx) ── primary format                                  │
+  │    2. .pdf  (WeasyPrint)  ── fallback if docx unavailable                    │
+  │    3. .txt  (plain text)  ── final fallback                                  │
+  │                                                                              │
   │  Includes:                                                                   │
   │    ├─ Org-AI-R, V^R, H^R scores                                              │
   │    ├─ 7 dimension score breakdown                                            │
-  │    ├─ Gap analysis results                                                   │
+  │    ├─ Gap analysis results + 100-day plan                                    │
   │    ├─ EBITDA scenario projections                                            │
   │    ├─ Recommendation: PROCEED / MONITOR / CONDITIONAL                        │
   │    └─ Confidential marking + colored recommendation boxes                    │
@@ -456,11 +478,15 @@
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  LPLetterGenerator (lp_letter.py)                                            │
   │                                                                              │
-  │  Quarterly LP update (.docx / .txt)                                          │
+  │  Output format chain:                                                        │
+  │    1. .pdf  (WeasyPrint HTML-to-PDF) ── primary format                       │
+  │    2. .txt  (plain text)             ── fallback                             │
+  │                                                                              │
   │  Includes:                                                                   │
-  │    ├─ Portfolio performance summary                                          │
-  │    ├─ Quarterly deltas (Org-AI-R change)                                     │
-  │    ├─ Highlights and key developments                                        │
+  │    ├─ Quarterly AI readiness update header                                   │
+  │    ├─ Fund-AI-R score and portfolio composition                              │
+  │    ├─ AI leaders count (>=70) and laggards count (<50)                        │
+  │    ├─ Portfolio highlights (top companies with scores)                       │
   │    └─ Next steps and outlook                                                 │
   └──────────────────────────────────────────────────────────────────────────────┘
 
@@ -507,7 +533,7 @@
 
   ━━━━━━━━━━━━━━━━━━━━━━ CS5: STREAMLIT DASHBOARD ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  streamlit run streamlit/cs5_app.py  ->  http://localhost:8501
+  Entry: streamlit run streamlit/cs5_app.py  ->  http://localhost:8501
 
   ┌──────────────────────────────────────────────────────────────────────────────┐
   │  Sidebar                                                                     │
@@ -516,30 +542,48 @@
   │    └─ DD runner (assessment_type selector)                                   │
   │                                                                              │
   │  Page 1: Portfolio Overview                                                  │
-  │    ├─ Fund-AI-R metrics                                                      │
+  │    ├─ Fund-AI-R metrics (overall fund score, company count)                 │
   │    ├─ Scatter: org_air vs sector                                             │
   │    ├─ Bar: quartile distribution                                             │
-  │    └─ Company metrics table                                                  │
+  │    └─ Company metrics table (ticker, sector, scores, deltas)                │
   │                                                                              │
-  │  Page 2: Company Deep Dive                                                   │
+  │  Page 2: Evidence Analysis                                                   │
   │    ├─ 7 justification panels per company                                     │
   │    ├─ Evidence cards (evidence_display.py)                                   │
   │    └─ Dimension table (score, level, confidence_interval)                    │
   │                                                                              │
-  │  Page 3: Value Creation                                                      │
-  │    ├─ Gap table (dimension, current, target, gap, priority)                  │
-  │    ├─ EBITDA scenarios {conservative, base, optimistic}                      │
-  │    └─ Improvement roadmap                                                    │
+  │  Page 3: Assessment History                                                  │
+  │    ├─ Historical snapshot trends                                             │
+  │    └─ Delta tracking (30d, 90d, since entry)                                │
   │                                                                              │
-  │  Page 4: IC Prep                                                             │
-  │    ├─ IC memo generation (PDF via WeasyPrint)                                │
-  │    └─ Download button (PDF / .txt)                                           │
-  │                                                                              │
-  │  Page 5: Agentic Due Diligence                                               │
+  │  Page 4: Agentic Workflow                                                    │
   │    ├─ Assessment type selector {screening, limited, full}                    │
   │    ├─ POST /api/v1/dd/run/{ticker}                                           │
   │    ├─ Monitor execution (poll status)                                        │
   │    └─ Approval dialog (if paused at HITL gate)                               │
+  │                                                                              │
+  │  Page 5: Fund-AI-R Analytics                                                 │
+  │    ├─ Fund-level metrics                                                     │
+  │    ├─ Sector concentration (HHI)                                             │
+  │    └─ Leaders / laggards breakdown                                           │
+  │                                                                              │
+  │  Page 6: MCP Server                                                          │
+  │    ├─ Tool documentation                                                     │
+  │    └─ Live tool testing interface                                            │
+  │                                                                              │
+  │  Page 7: Prometheus Metrics                                                  │
+  │    └─ Counter / histogram visualization from /metrics endpoint               │
+  │                                                                              │
+  │  Page 8: IC Memo / LP Letter                                                 │
+  │    ├─ IC memo generation (docx/pdf/txt)                                      │
+  │    ├─ LP letter generation (pdf/txt)                                         │
+  │    └─ Download buttons                                                       │
+  │                                                                              │
+  │  Page 9: Investment Tracker                                                  │
+  │    └─ ROI projections (revenue lift, EBITDA lift, multiple expansion)        │
+  │                                                                              │
+  │  Page 10: Mem0 Memory                                                        │
+  │    └─ Semantic memory viewer (cross-session agent recall)                    │
   └──────────────────────────────────────────────────────────────────────────────┘
 
   ━━━━━━━━━━━━━━━━━━━━ CS5: DATA STORES & OBSERVABILITY ━━━━━━━━━━━━━━━━━━━━━━━
@@ -554,11 +598,309 @@
   │  AWS S3     │  Raw/parsed/chunked SEC filings, signal data, results JSON   │
   ├─────────────┼──────────────────────────────────────────────────────────────┤
   │  ChromaDB   │  Dense vector store + BM25 sparse index for RAG              │
+  ├─────────────┼──────────────────────────────────────────────────────────────┤
+  │  Mem0       │  Optional semantic memory for cross-session agent recall     │
   └─────────────┴──────────────────────────────────────────────────────────────┘
 
   Observability:
     ├─ Prometheus counters/histograms (@track_mcp_tool, @track_agent decorators)
     ├─ structlog with JSON format + correlation ID on every log entry
     ├─ X-Correlation-ID header on all HTTP requests/responses
-    └─ Health endpoints: GET /healthz (liveness), GET /health (dependency check)
+    ├─ Health endpoints: GET /healthz (liveness), GET /health (dependency check)
+    └─ Metrics endpoint: GET /metrics (Prometheus scrape)
+
+  ━━━━━━━━━━━━━━━━━━━━━━━ LLM ROUTING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ModelRouter (app/services/llm/router.py) — LiteLLM abstraction, $5/day budget
+
+  ┌──────────────────┬──────────────────────────────────┬──────────────────────┐
+  │  Provider        │  Tasks                           │  Cost                │
+  ├──────────────────┼──────────────────────────────────┼──────────────────────┤
+  │  Groq (FREE)     │  evidence_extraction,            │  ~$0.00/1K tokens    │
+  │  llama-3.1-8b    │  keyword_matching,               │                      │
+  │  llama-3.3-70b   │  hyde_generation,                │                      │
+  │                  │  governance_extraction,           │                      │
+  │                  │  tech_stack_fallback              │                      │
+  ├──────────────────┼──────────────────────────────────┼──────────────────────┤
+  │  Claude Haiku    │  justification_generation,       │  $0.00125/1K tokens  │
+  │  4.5 (Anthropic) │  ic_summary,                     │  ~4000 chatbot       │
+  │                  │  chat_response                   │  answers per $5      │
+  ├──────────────────┼──────────────────────────────────┼──────────────────────┤
+  │  DeepSeek        │  Fallback for all tasks          │  $0.00014/1K tokens  │
+  │  deepseek-chat   │  (if Groq + Claude fail)         │                      │
+  └──────────────────┴──────────────────────────────────┴──────────────────────┘
+
+  Embeddings: SentenceTransformers all-MiniLM-L6-v2 (local, no API cost)
+
+  ━━━━━━━━━━━━━━━━━━━━━ COMPLETE DIRECTORY STRUCTURE ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  pe-org-air-platform/
+  ├── app/
+  │   ├── main.py                          # FastAPI entry point (19 routers registered)
+  │   ├── shutdown.py                      # Graceful shutdown event
+  │   │
+  │   ├── core/
+  │   │   ├── dependencies.py              # Singleton DI providers
+  │   │   ├── errors.py                    # PlatformError hierarchy
+  │   │   ├── lifespan.py                  # Startup init + shutdown hooks
+  │   │   ├── logging_config.py            # structlog configuration
+  │   │   └── settings.py                  # Settings base
+  │   │
+  │   ├── middleware/
+  │   │   └── correlation.py               # X-Correlation-ID middleware
+  │   │
+  │   ├── config/
+  │   │   ├── __init__.py                  # App settings (Snowflake, Redis, S3, LLM keys)
+  │   │   ├── company_mappings.py          # CS3_PORTFOLIO, COMPANY_NAME_MAPPINGS, CompanyRegistry
+  │   │   └── retrieval_settings.py        # RAG tunables (max_context_chars, etc.)
+  │   │
+  │   ├── routers/                         # 18 HTTP endpoint routers
+  │   │   ├── health.py                    # /healthz, /health (deep check)
+  │   │   ├── config.py                    # Scoring params, weights, baselines
+  │   │   ├── companies.py                 # CS1: Company CRUD + Groq enrichment
+  │   │   ├── portfolios.py                # CS1: Portfolio management
+  │   │   ├── documents.py                 # CS2: SEC collection / parsing / chunking
+  │   │   ├── signals.py                   # CS2: Signal collection (6 categories)
+  │   │   ├── evidence.py                  # CS2: Evidence summary
+  │   │   ├── dimension_scores.py          # CS3: Dimension weight config
+  │   │   ├── scoring.py                   # CS3: Dimension scoring pipeline
+  │   │   ├── tc_vr_scoring.py             # CS3: Talent Concentration + V^R
+  │   │   ├── position_factor.py           # CS3: Position Factor
+  │   │   ├── hr_scoring.py                # CS3: Human Readiness H^R
+  │   │   ├── orgair_scoring.py            # CS3: Org-AI-R (+ assessment_router secondary)
+  │   │   ├── rag.py                       # CS4: ChromaDB indexing + RAG + chatbot
+  │   │   ├── analyst_notes.py             # CS4: Post-LOI DD notes
+  │   │   ├── bonus.py                     # CS4: Bonus analysis
+  │   │   ├── history.py                   # CS4: Assessment history tracking
+  │   │   └── due_diligence.py             # CS5: LangGraph DD workflow + HITL
+  │   │
+  │   ├── services/
+  │   │   ├── signals/                     # Signal collection services
+  │   │   │   ├── base_signal_service.py   # Base interface
+  │   │   │   ├── job_signal_service.py    # JobSpy → technology_hiring
+  │   │   │   ├── job_data_service.py      # Job data collection
+  │   │   │   ├── patent_signal_service.py # PatentsView → innovation_activity
+  │   │   │   ├── tech_signal_service.py   # BuiltWith → digital_presence
+  │   │   │   ├── leadership_service.py    # DEF-14A → leadership_signals
+  │   │   │   ├── board_composition_service.py # Board analysis → board_composition
+  │   │   │   ├── culture_signal_service.py # Glassdoor → culture
+  │   │   │   └── evidence_service.py      # Evidence aggregation
+  │   │   │
+  │   │   ├── search/
+  │   │   │   └── vector_store.py          # ChromaDB client + EMBEDDING_MODEL
+  │   │   │
+  │   │   ├── retrieval/
+  │   │   │   ├── hybrid.py                # BM25 + dense hybrid retrieval
+  │   │   │   ├── dimension_mapper.py      # Evidence → V^R dimension mapping
+  │   │   │   └── hyde.py                  # HyDE hypothetical doc embeddings
+  │   │   │
+  │   │   ├── justification/
+  │   │   │   └── generator.py             # LLM-based score justification
+  │   │   │
+  │   │   ├── llm/
+  │   │   │   └── router.py                # ModelRouter (Groq/DeepSeek/Claude via LiteLLM)
+  │   │   │
+  │   │   ├── integration/                 # CS5 integration clients
+  │   │   │   ├── cs1_client.py            # Company metadata (Sector enum, Company dataclass)
+  │   │   │   ├── cs2_client.py            # S3 evidence + Groq keyword expansion
+  │   │   │   ├── cs3_client.py            # Scoring (DimensionScore, CompanyAssessment)
+  │   │   │   └── cs4_client.py            # RAG search + JustificationResult
+  │   │   │
+  │   │   ├── value_creation/
+  │   │   │   ├── ebitda.py                # EBITDA projections (sector multipliers)
+  │   │   │   └── gap_analysis.py          # Dimension gap analysis + improvement actions
+  │   │   │
+  │   │   ├── reporting/
+  │   │   │   ├── ic_memo.py               # IC memo (.docx/.pdf/.txt)
+  │   │   │   └── lp_letter.py             # LP letter (.pdf/.txt)
+  │   │   │
+  │   │   ├── tracking/
+  │   │   │   ├── history_service.py       # Assessment snapshots + trends
+  │   │   │   └── investment_tracker.py    # ROI computation
+  │   │   │
+  │   │   ├── analytics/
+  │   │   │   └── fund_air.py              # Fund-AI-R calculator (EV-weighted)
+  │   │   │
+  │   │   ├── observability/
+  │   │   │   └── metrics.py               # Prometheus counters/histograms
+  │   │   │
+  │   │   ├── workflows/
+  │   │   │   └── ic_prep.py               # IC meeting package workflow
+  │   │   │
+  │   │   ├── collection/
+  │   │   │   └── analyst_notes.py         # AnalystNotesCollector
+  │   │   │
+  │   │   ├── document_collector.py        # SEC EDGAR download + S3 upload
+  │   │   ├── document_parsing_service.py  # HTML/PDF text extraction
+  │   │   ├── document_chunking_service.py # Overlapping chunk generation
+  │   │   ├── scoring_service.py           # CS3 rubric scoring + dimension mapping
+  │   │   ├── composite_scoring_service.py # TC, V^R, PF, H^R, Org-AI-R orchestrator
+  │   │   ├── groq_enrichment.py           # Groq LLM metadata enrichment
+  │   │   ├── portfolio_data_service.py    # Unified CS1-CS4 facade
+  │   │   ├── cache.py                     # Redis TTL cache helpers
+  │   │   ├── redis_cache.py               # Redis client wrapper
+  │   │   ├── s3_storage.py                # AWS S3 client wrapper
+  │   │   └── task_store.py                # Redis-backed background task state
+  │   │
+  │   ├── agents/
+  │   │   ├── state.py                     # DueDiligenceState TypedDict + AgentMessage
+  │   │   ├── specialists.py               # MCPToolCaller + 4 specialist agents
+  │   │   ├── supervisor.py                # LangGraph StateGraph factory + HITL node
+  │   │   └── memory.py                    # Mem0 semantic memory (optional)
+  │   │
+  │   ├── mcp/
+  │   │   ├── server.py                    # MCP stdio server (6 tools, 2 resources, 2 prompts)
+  │   │   └── test_mcp.py                  # MCP integration tests
+  │   │
+  │   ├── pipelines/
+  │   │   ├── sec_edgar.py                 # SEC EDGAR filing collector
+  │   │   ├── job_signals.py               # Job posting signal processing
+  │   │   ├── patent_signals.py            # Patent signal processing
+  │   │   ├── tech_signals.py              # Technology signal analysis
+  │   │   ├── leadership_analyzer.py       # Leadership analysis
+  │   │   ├── board_analyzer.py            # Board composition analysis
+  │   │   ├── board_io.py                  # Board data I/O
+  │   │   ├── glassdoor_collector.py       # Glassdoor culture data
+  │   │   ├── document_parser.py           # Multi-format document parsing
+  │   │   ├── chunking.py                  # Chunking utilities
+  │   │   ├── keywords.py                  # Keyword management
+  │   │   ├── signal_pipeline_state.py     # Pipeline state management
+  │   │   └── utils.py                     # Pipeline utilities
+  │   │
+  │   ├── repositories/                    # 11 Snowflake data access modules
+  │   │   ├── base.py                      # RepositoryException + connection base
+  │   │   ├── company_repository.py
+  │   │   ├── industry_repository.py
+  │   │   ├── document_repository.py
+  │   │   ├── chunk_repository.py
+  │   │   ├── signal_repository.py
+  │   │   ├── scoring_repository.py
+  │   │   ├── composite_scoring_repository.py
+  │   │   ├── dimension_score_repository.py
+  │   │   ├── assessment_repository.py
+  │   │   ├── assessment_snapshot_repository.py
+  │   │   └── health_repository.py
+  │   │
+  │   ├── models/
+  │   │   ├── dimension.py                 # DIMENSION_WEIGHTS dict
+  │   │   ├── document.py                  # Document model
+  │   │   ├── enumerations.py              # DIMENSION_ALIAS_MAP
+  │   │   ├── evidence.py                  # Evidence model
+  │   │   └── signal.py                    # Signal model
+  │   │
+  │   ├── schemas/
+  │   │   ├── evidence.py                  # Evidence response schema
+  │   │   ├── portfolio.py                 # Portfolio response schema
+  │   │   └── scoring.py                   # Scoring response schema
+  │   │
+  │   ├── scoring/                         # 10 calculation modules
+  │   │   ├── evidence_mapper.py           # Evidence-to-dimension mapping (Table 1)
+  │   │   ├── rubric_scorer.py             # 5-level keyword rubric engine
+  │   │   ├── talent_concentration.py      # TC calculation
+  │   │   ├── vr_calculator.py             # V^R calculation
+  │   │   ├── position_factor.py           # PF calculation
+  │   │   ├── hr_calculator.py             # H^R calculation
+  │   │   ├── synergy_calculator.py        # Synergy calculation
+  │   │   ├── orgair_calculator.py         # Final Org-AI-R score
+  │   │   ├── confidence_calculator.py     # Confidence interval
+  │   │   └── utils.py                     # Scoring utilities
+  │   │
+  │   ├── guardrails/
+  │   │   ├── input_guards.py              # Ticker, question, dimension validation
+  │   │   └── output_guards.py             # Answer length, grounding, refusal checks
+  │   │
+  │   ├── prompts/
+  │   │   └── rag_prompts.py               # Chatbot + dimension detection prompts
+  │   │
+  │   ├── clients/
+  │   │   └── base.py                      # BaseAPIClient (async HTTP + backoff)
+  │   │
+  │   ├── utils/
+  │   │   ├── company_resolver.py          # Ticker/name/CIK resolution
+  │   │   ├── id_utils.py                  # ID generation
+  │   │   └── serialization.py             # JSON serialization helpers
+  │   │
+  │   ├── scripts/                         # Utility / maintenance scripts
+  │   │   ├── collect_evidence.py          # Evidence collection
+  │   │   ├── ensure_portfolio.py          # Portfolio validation
+  │   │   ├── fill_sectors.py              # Sector population
+  │   │   ├── seed_history.py              # History seeding
+  │   │   ├── query_snowflake.py           # Snowflake query utility
+  │   │   ├── recalc_culture.py            # Culture score recalculation
+  │   │   ├── reingest_10k.py              # 10-K reingestion
+  │   │   ├── diagnose_ge_sections.py      # GE diagnostics
+  │   │   └── test_connections.py          # Connection tests
+  │   │
+  │   └── database/                        # SQL schemas + seed data
+  │       ├── schema.sql                   # Main application schema
+  │       ├── document_schema.sql
+  │       ├── document_chunks_schema.sql
+  │       ├── signals_schema.sql
+  │       ├── digital_presence_schema.sql
+  │       ├── scoring_runs_schema.sql
+  │       ├── final_scoring_schema.sql
+  │       ├── final_notes.sql
+  │       ├── signal_mapping_dimensions.sql
+  │       ├── seed-companies.sql           # 5 portfolio companies
+  │       ├── seed-documents.sql
+  │       ├── seed-dimension-scores.sql
+  │       ├── seed-assessments.sql
+  │       └── seed-industries.sql
+  │
+  ├── streamlit/                           # Portfolio intelligence dashboard
+  │   ├── cs5_app.py                       # Main entry point (10 pages)
+  │   ├── app.py                           # Legacy entry point
+  │   ├── cs4_app.py                       # CS4 chatbot interface
+  │   ├── data_loader.py                   # Data loading utilities
+  │   ├── requirements.txt                 # Streamlit-specific dependencies
+  │   ├── components/
+  │   │   ├── charts.py                    # Plotly chart components
+  │   │   └── evidence_display.py          # Evidence cards + justification panels
+  │   ├── views/
+  │   │   ├── chatbot_cs4.py               # CS4 chatbot view
+  │   │   ├── company_deep_dive.py         # Company deep dive
+  │   │   ├── evidence_cs2.py              # Evidence visualization
+  │   │   ├── executive_summary.py         # Executive summary
+  │   │   ├── pipeline_cs4.py              # Pipeline visualization
+  │   │   ├── platform_cs1.py              # Platform overview
+  │   │   ├── scoring_cs3.py               # Scoring visualization
+  │   │   └── testing_coverage.py          # Test coverage report
+  │   └── data/
+  │       └── chat_history/                # Sample chat histories
+  │
+  ├── dags/                                # Apache Airflow DAGs
+  │   ├── evidence_indexing_dag.py         # Nightly evidence → ChromaDB (2 AM)
+  │   ├── job_signals_dag.py               # Job signal collection (child)
+  │   └── signal_collection_parent_dag.py  # Parent DAG orchestrator (3 AM)
+  │
+  ├── tests/                               # 25+ pytest test files
+  │   ├── conftest.py                      # Fixtures
+  │   ├── test_api.py, test_e2e.py         # API + E2E tests
+  │   ├── test_redis_cache.py              # Cache tests
+  │   ├── test_hybrid_retriever.py         # Retrieval tests
+  │   ├── test_mcp_integration.py          # MCP tests
+  │   ├── test_property_based.py           # Hypothesis property tests
+  │   └── ...                              # + 15 more test modules
+  │
+  ├── exercises/                           # Learning materials
+  │   ├── agentic_due_diligence.py         # Agentic DD example
+  │   └── complete_pipeline.py             # End-to-end pipeline example
+  │
+  ├── data/                                # Local data cache
+  │   ├── raw/, parsed/, chunks/           # SEC filing stages
+  │   ├── signals/                         # Signal data cache
+  │   ├── culture_cache/                   # Glassdoor culture data
+  │   └── proxy_cache/                     # DEF-14A proxy cache
+  │
+  ├── results/                             # Pipeline output
+  │   ├── {nvda,jpm,wmt,ge,dg}.json       # Per-company results
+  │   ├── portfolio_summary.json           # Portfolio summary
+  │   └── reports/                         # Generated IC memos + LP letters
+  │
+  ├── docker-compose.yml                   # API (:8000) + Redis (:6379) + Airflow (:8080)
+  ├── Dockerfile                           # API container
+  ├── pyproject.toml                       # Poetry config (Python >=3.11, 50+ deps)
+  ├── requirements.txt                     # pip requirements
+  ├── CLAUDE.md                            # Architecture guide (developer reference)
+  └── API_DOCS.md                          # API endpoint documentation
 
