@@ -477,11 +477,11 @@ class ScoringAgent:
         org_air = score_data.get("org_air", 0.0)
 
         # HITL gate: score outside normal operating range triggers human review
-        requires_approval = org_air > 85 or org_air < 40
+        requires_approval = org_air > 80 or org_air < 40
         approval_reason: Optional[str] = None
         if requires_approval:
             approval_reason = (
-                f"Score {org_air:.1f} outside normal range [40, 85].  "
+                f"Score {org_air:.1f} outside normal range [40, 80].  "
                 "Human review required before proceeding."
             )
             logger.warning("HITL triggered for %s: score=%.1f", company_id, org_air)

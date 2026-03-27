@@ -263,7 +263,6 @@ def render_company_evidence_panel(
                         If None, shows interactive fetch UI.
     """
     ticker = company_id
-    st.header(f"Evidence Analysis: {ticker}")
 
     cache_key_all = f"justifications_{ticker}"
 
