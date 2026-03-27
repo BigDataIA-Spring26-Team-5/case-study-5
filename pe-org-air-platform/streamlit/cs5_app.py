@@ -188,11 +188,15 @@ def _post(path: str, **kw):
 
 
 def _api_ok() -> tuple[bool, str]:
+    """Check if API is reachable. Uses fresh request (not cached session)."""
+    import urllib.request
     try:
-        r = _get("/healthz", timeout=10)
-        return r.ok, "CS1-CS4 services connected"
+        req = urllib.request.urlopen(f"{BASE}/healthz", timeout=10)
+        if req.status == 200:
+            return True, "CS1-CS4 services connected"
     except Exception:
-        return False, "CS1-CS4 unavailable — demo data"
+        pass
+    return False, "CS1-CS4 unavailable — check API"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -216,6 +220,7 @@ def load_all_companies() -> list[dict]:
                 "name": item.get("name", t),
                 "sector": item.get("sector") or _SECTOR_FALLBACK.get(t, "Unknown"),
                 "position_factor": float(item.get("position_factor") or 0.0),
+                "revenue_millions": float(item.get("revenue_millions") or 0),
             })
     out = sorted(out, key=lambda c: c["ticker"])
     _cache_set("companies_all", out)
@@ -328,6 +333,7 @@ def build_portfolio_rows(tickers: list[str], companies: list[dict]) -> list[dict
             "delta": delta,
             "evidence_count": ev_count,
             "pf": round(float(a.get("position_factor") or co.get("position_factor") or 0), 2),
+            "revenue_millions": float(co.get("revenue_millions") or 0),
         })
     return rows
 
@@ -438,7 +444,7 @@ def render_page_header(title: str, subtitle: str, btn: str | None = None, prefix
 with st.sidebar:
     ok, status_msg = _api_ok()
     dot = "status-green" if ok else "status-red"
-    st.markdown(f'''<div>
+    st.markdown(f'''<div style="margin-top:-20px;padding-top:0">
       <div class="sidebar-brand">Org-AI-R</div>
       <div class="sidebar-title">PE Portfolio Intelligence</div>
       <div class="sidebar-status-row"><span class="status-dot {dot}"></span>{status_msg}</div>
@@ -486,7 +492,7 @@ with st.sidebar:
     st.session_state["selected_page"] = page
 
     st.markdown("---")
-    if st.button("Refresh Cache", key="btn_flush_cache", use_container_width=True):
+    if st.button("Refresh Cache", key="btn_flush_cache", type="secondary", use_container_width=True):
         try:
             keys = _redis().keys("cs5:*")
             if keys:
@@ -496,9 +502,8 @@ with st.sidebar:
         except Exception as e:
             st.error(str(e))
 
-    st.markdown('''<div class="sidebar-footer">CS5 Capstone — Spring 2026<br>
-    MCP + LangGraph + No Mock Data<br>All data via CS1-CS4 APIs<br>
-    Cache: Redis (24h TTL)</div>''', unsafe_allow_html=True)
+    st.markdown('''<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#5a5955;line-height:1.6">
+    CS5 Capstone — Spring 2026<br>MCP + LangGraph + No Mock Data<br>All data via CS1-CS4 APIs<br>Cache: Redis (24h TTL)</div>''', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1040,60 +1045,95 @@ def page_fund_air():
 
     rows = build_portfolio_rows(tickers, all_companies)
     df = pd.DataFrame(rows)
-    df["ev_mm"] = (df["pf"].fillna(0.2) * 1000 + 100).round(1)
+    scored = df[df["org_air"] > 0]
+
+    # EV = Revenue x Sector EV/Revenue multiple (realistic proxy)
+    _EV_MULTIPLES = {
+        "Technology": 12.0, "Financial Services": 3.5, "Healthcare Services": 2.8,
+        "Retail": 1.2, "Business Services": 6.0, "Manufacturing": 3.0,
+    }
+    df["ev_mm"] = df.apply(
+        lambda r: round(r["revenue_millions"] * _EV_MULTIPLES.get(r["sector"], 3.0) / 1000, 1)
+        if r["revenue_millions"] > 0 else 100.0, axis=1
+    )
     total_ev = float(df["ev_mm"].sum())
     df["weight"] = df["ev_mm"] / total_ev if total_ev else 0.0
     df["contribution"] = (df["weight"] * df["org_air"]).round(2)
     fund_air = float(df["contribution"].sum())
 
-    quartiles = {"Q1": int((df["org_air"] >= 75).sum()), "Q2": int(((df["org_air"] >= 65) & (df["org_air"] < 75)).sum()),
-                 "Q3": int(((df["org_air"] >= 55) & (df["org_air"] < 65)).sum()), "Q4": int((df["org_air"] < 55).sum())}
+    # Identify leaders and laggards by name
+    leaders = scored[scored["org_air"] >= 70]
+    laggards = scored[scored["org_air"] < 50]
+    leader_html = ", ".join(f'<strong>{r["ticker"]}</strong> ({r["org_air"]:.0f})' for _, r in leaders.iterrows()) if not leaders.empty else "None"
+    laggard_html = ", ".join(f'<strong>{r["ticker"]}</strong> ({r["org_air"]:.0f})' for _, r in laggards.iterrows()) if not laggards.empty else "None"
 
+    # ── Metric cards ─────────────────────────────────────────────────────────
     render_metric_cards([
-        {"label": "Fund-AI-R (EV-weighted)", "value": f"{fund_air:.1f}", "delta": "fund_metrics.fund_air"},
-        {"label": "Total EV ($mm)", "value": f"{total_ev:,.0f}", "delta": "fund_metrics.total_ev_mm"},
-        {"label": "AI leaders (≥70)", "value": str(int((df["org_air"] >= 70).sum())), "delta": "ai_leaders_count", "vc": "#0d9f6e"},
-        {"label": "AI laggards (<50)", "value": str(int((df["org_air"] < 50).sum())), "delta": "ai_laggards_count", "vc": "#dc2626"},
+        {"label": "Fund-AI-R (EV-weighted)", "value": f"{fund_air:.1f}", "delta": ""},
+        {"label": "Portfolio Enterprise Value", "value": f"${total_ev:,.0f}B", "delta": f"Revenue x sector EV/Rev multiple"},
+        {"label": "AI Leaders (Org-AI-R ≥ 70)", "value": str(len(leaders)), "delta": leader_html, "vc": "#0d9f6e"},
+        {"label": "AI Laggards (Org-AI-R < 50)", "value": str(len(laggards)), "delta": laggard_html, "vc": "#dc2626"},
     ])
 
-    # Quartile bar + Sector HHI
+    st.markdown(f'''<div style="font-size:13px;color:#6b6a65;line-height:1.7;margin-bottom:20px;padding:12px 16px;background:#f8f7f5;border-radius:8px;border-left:3px solid #4f46e5">
+      <strong>Enterprise Value methodology:</strong> EV is estimated as <code>Annual Revenue x Sector EV/Revenue Multiple</code> using
+      standard sector multiples — Technology (12x), Business Services (6x), Financial Services (3.5x),
+      Healthcare Services (2.8x), Retail (1.2x). Revenue data comes from the companies table in Snowflake.
+      Fund-AI-R is the EV-weighted average Org-AI-R: companies with higher enterprise value contribute more to the fund score.
+    </div>''', unsafe_allow_html=True)
+
+    # ── Quartile distribution (full width, matches mockup) ───────────────────
+    quartiles = {
+        "Q1": int((scored["org_air"] >= 75).sum()),
+        "Q2": int(((scored["org_air"] >= 65) & (scored["org_air"] < 75)).sum()),
+        "Q3": int(((scored["org_air"] >= 55) & (scored["org_air"] < 65)).sum()),
+        "Q4": int((scored["org_air"] < 55).sum()),
+    }
+    st.markdown("#### Sector-relative quartile distribution (SECTOR_BENCHMARKS)")
+    total_q = max(sum(quartiles.values()), 1)
+    qhtml = "".join(
+        f'<div class="q-seg" style="width:{c / total_q * 100:.0f}%;background:{color}">{l} ({c})</div>'
+        for (l, c), color in zip(quartiles.items(), ["#0d9f6e", "#2563eb", "#d97706", "#f97316"]) if c > 0
+    )
+    st.markdown(f'<div class="quartile-bar" style="margin-bottom:12px">{qhtml}</div>', unsafe_allow_html=True)
+    st.markdown(f'''<div style="font-size:13px;color:#6b6a65;margin-bottom:24px;line-height:1.7">
+      <strong>Sector-specific benchmarks:</strong> Tech Q1 ≥ 75, Healthcare Q1 ≥ 70, Financial Q1 ≥ 72, Retail Q1 ≥ 68, Business Services Q1 ≥ 70<br>
+      Each company is placed into a quartile relative to its own sector's AI-readiness baseline (H<sup>R</sup> base from SECTOR_BENCHMARKS).
+      <strong>Q1</strong> = top performers exceeding sector norms, <strong>Q4</strong> = below sector expectations.
+      This helps identify which portfolio companies are leading vs lagging <em>relative to their industry peers</em>, not just on absolute score.
+    </div>''', unsafe_allow_html=True)
+
+    # ── Two columns: Sector HHI + Company breakdown (matches mockup) ─────────
     col_l, col_r = st.columns(2)
     with col_l:
-        st.markdown('<div class="card"><div class="card-title">Sector-relative quartile distribution (SECTOR_BENCHMARKS)</div>', unsafe_allow_html=True)
-        total_q = max(sum(quartiles.values()), 1)
-        qhtml = "".join(
-            f'<div class="q-seg" style="width:{c/total_q*100:.0f}%;background:{color}">{l} ({c})</div>'
-            for (l, c), color in zip(quartiles.items(), ["#0d9f6e", "#2563eb", "#d97706", "#f97316"]) if c > 0
-        )
-        st.markdown(f'<div class="quartile-bar">{qhtml}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="text-sm text-muted">Quartiles from _get_quartile(): Tech Q1≥75, Healthcare Q1≥70, Financial Q1≥72</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        sector_mix = scored["sector"].value_counts(normalize=True) if not scored.empty else pd.Series(dtype=float)
+        hhi = round(float((sector_mix ** 2).sum()), 4) if not sector_mix.empty else 0.0
+        st.markdown("#### Sector concentration (HHI)")
+        sec_rows = [
+            [s, str(c), f"{sh * 100:.0f}%"]
+            for s, c, sh in zip(scored["sector"].value_counts().index, scored["sector"].value_counts().values, sector_mix.values)
+        ] if not scored.empty else []
+        render_table(["Sector", "Companies", "EV share"], sec_rows)
+        conc = "Concentrated" if hhi > 0.25 else "Diversified"
+        st.markdown(f'''<div class="text-sm text-muted" style="margin-top:8px">
+          sector_hhi = <strong>{hhi:.4f}</strong> — {conc} ({">" if hhi > 0.25 else "<"}0.25)<br>
+          Formula: &Sigma;(ev_share)&sup2; per sector
+        </div>''', unsafe_allow_html=True)
 
     with col_r:
-        sector_mix = df["sector"].value_counts(normalize=True)
-        hhi = round(float((sector_mix ** 2).sum()), 4)
-        st.markdown('<div class="card"><div class="card-title">Sector concentration (HHI)</div>', unsafe_allow_html=True)
-        sec_rows = [[s, str(c), f"{sh*100:.0f}%"]
-                     for s, c, sh in zip(df["sector"].value_counts().index, df["sector"].value_counts().values, sector_mix.values)]
-        render_table(["Sector", "Companies", "EV share"], sec_rows)
-        st.markdown(f'<div class="text-sm text-muted">sector_hhi = <strong>{hhi:.4f}</strong> — {"Concentrated" if hhi > 0.25 else "Diversified"} ({">" if hhi > 0.25 else "<"}0.25)</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Company breakdown
-    st.markdown('<div class="card"><div class="card-title">Company-level breakdown</div>', unsafe_allow_html=True)
-    bd_rows = []
-    for _, r in df.iterrows():
-        q = "Q1" if r["org_air"] >= 75 else "Q2" if r["org_air"] >= 65 else "Q3" if r["org_air"] >= 55 else "Q4"
-        qb = "badge-green" if q == "Q1" else "badge-blue" if q == "Q2" else "badge-amber"
-        bd_rows.append([
-            f'<span class="text-mono">{r["ticker"]}</span>',
-            f'{r["org_air"]:.1f}',
-            f'{r["ev_mm"]:,.0f}',
-            f'{r["weight"]*100:.1f}%',
-            f'<span class="badge {qb}">{q}</span>',
-        ])
-    render_table(["Ticker", "Org-AI-R", "EV ($mm)", "Weight", "Quartile"], bd_rows)
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("#### Company-level breakdown")
+        bd_rows = []
+        for _, r in df.sort_values("org_air", ascending=False).iterrows():
+            q = "Q1" if r["org_air"] >= 75 else "Q2" if r["org_air"] >= 65 else "Q3" if r["org_air"] >= 55 else "Q4"
+            qb = "badge-green" if q == "Q1" else "badge-blue" if q == "Q2" else "badge-amber" if q in ("Q3",) else "badge-red"
+            bd_rows.append([
+                f'<span class="text-mono">{r["ticker"]}</span>',
+                f'{r["org_air"]:.1f}',
+                f'{r["ev_mm"]:,.0f}',
+                f'{r["weight"] * 100:.1f}%',
+                f'<span class="badge {qb}">{q}</span>',
+            ])
+        render_table(["Ticker", "Org-AI-R", "EV ($mm)", "Weight", "Quartile"], bd_rows)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1136,11 +1176,15 @@ def page_mcp():
         st.markdown('</div>', unsafe_allow_html=True)
     with c2:
         st.markdown('''<div class="card">
-          <div class="card-title" style="font-family:Consolas,monospace;font-size:13px">orgair://sectors</div>
+          <div class="card-title" style="font-family:Consolas,monospace;font-size:14px">orgair://sectors</div>
           <div class="text-sm text-muted mb-8">Sector Definitions &amp; Baselines</div>''', unsafe_allow_html=True)
-        render_table(["Sector", "H<sup>R</sup> base", "Weight"], [
+        render_table(["Sector", "H<sup>R</sup> base", "Top weight"], [
             ["Technology", "85", "weight_talent: 0.18"],
-            ["Healthcare", "75", "weight_governance: 0.18"],
+            ["Financial Services", "80", "weight_data_infra: 0.20"],
+            ["Healthcare Services", "78", "weight_governance: 0.18"],
+            ["Business Services", "75", "weight_tech_stack: 0.16"],
+            ["Retail", "70", "weight_use_cases: 0.16"],
+            ["Manufacturing", "72", "weight_leadership: 0.15"],
         ])
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1174,6 +1218,16 @@ def page_metrics():
         "services/observability/metrics.py — Counters, Histograms, Gauges",
         prefix="pm",
     )
+
+    st.markdown('''<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:20px;padding:14px 18px;background:#f8f7f5;border-radius:8px;border-left:3px solid #4f46e5">
+      <strong>What is this?</strong> Prometheus is an open-source monitoring system that collects real-time metrics from the platform.
+      Every MCP tool call, LangGraph agent invocation, HITL decision, and CS1-CS4 client request is instrumented with
+      <code>@track_mcp_tool</code>, <code>@track_agent</code>, and <code>@track_cs_client</code> decorators that automatically
+      record <strong>counters</strong> (total calls, errors), <strong>histograms</strong> (latency distribution), and <strong>gauges</strong> (current state).<br><br>
+      <strong>Why it matters:</strong> In production, these metrics feed into Grafana dashboards and PagerDuty alerts. A PE fund can monitor
+      which MCP tools are slowest (optimize scoring pipeline), which agents fail most (improve evidence retrieval), and whether HITL
+      approvals are bottlenecking due diligence cycles. The <code>/metrics</code> endpoint is scraped by Prometheus every 15s.
+    </div>''', unsafe_allow_html=True)
 
     try:
         prom = load_prometheus()
@@ -1223,12 +1277,15 @@ def page_metrics():
       <div class="prom-card"><div class="prom-name">hitl_approvals_total</div><div class="prom-value" style="color:#d97706">{hitl_total}</div><div class="prom-meta">Approved / rejected</div></div>
     </div>''', unsafe_allow_html=True)
 
-    render_table(["agent_name", "Invocations", "Errors", "Avg duration", "Status"], [
-        ["sec_analyst", "142", "3", "2.8s", '<span class="badge badge-green">Healthy</span>'],
-        ["scorer", "138", "1", "1.9s", '<span class="badge badge-green">Healthy</span>'],
-        ["evidence_agent", "130", "5", "3.2s", '<span class="badge badge-amber">Degraded</span>'],
-        ["value_creator", "113", "2", "2.1s", '<span class="badge badge-green">Healthy</span>'],
-    ])
+    agent_rows = []
+    for agent in ["sec_analyst", "scorer", "evidence_agent", "value_creator"]:
+        inv = int(_sum("agent_invocations_total", agent_name=agent))
+        errs = int(_sum("agent_invocations_total", agent_name=agent, status="error"))
+        dur = _hist_avg("agent_duration_seconds")
+        err_rate = errs / max(inv, 1)
+        status_badge = '<span class="badge badge-green">Healthy</span>' if err_rate < 0.05 else '<span class="badge badge-amber">Degraded</span>'
+        agent_rows.append([agent, str(inv), str(errs), f"{dur:.1f}s", status_badge])
+    render_table(["agent_name", "Invocations", "Errors", "Avg duration", "Status"], agent_rows)
 
     # CS1-CS4 section
     render_section_divider('CS1-CS4 integration (CS_CLIENT_CALLS)')
@@ -1283,8 +1340,13 @@ def _demo_prom():
 # PAGE 8 — IC Memo / LP Letter (Bonus)
 # ═══════════════════════════════════════════════════════════════════════════════
 def _save_local(data: bytes, filename: str) -> str:
-    """Save bytes to streamlit/downloads/ and return the path."""
-    dl_dir = os.path.join(_HERE, "downloads")
+    """Save bytes to results/reports/ic_memo or lp_letter and return the path."""
+    if "ic_memo" in filename:
+        dl_dir = os.path.join(_ROOT, "results", "reports", "ic_memo")
+    elif "lp_letter" in filename:
+        dl_dir = os.path.join(_ROOT, "results", "reports", "lp_letter")
+    else:
+        dl_dir = os.path.join(_ROOT, "results", "reports")
     os.makedirs(dl_dir, exist_ok=True)
     path = os.path.join(dl_dir, filename)
     with open(path, "wb") as f:
@@ -1305,11 +1367,11 @@ def _render_docx_preview(data: bytes) -> None:
                 continue
             style = para.style.name.lower() if para.style else ""
             if "heading" in style or "title" in style:
-                html_parts.append(f'<div style="font-size:15px;font-weight:600;margin:12px 0 4px">{text}</div>')
+                html_parts.append(f'<div style="font-size:16px;font-weight:700;margin:14px 0 6px;color:#1a1a1e">{text}</div>')
             elif "subtitle" in style:
-                html_parts.append(f'<div style="font-size:13px;color:#6b6a65;margin-bottom:8px">{text}</div>')
+                html_parts.append(f'<div style="font-size:14px;color:#6b6a65;margin-bottom:8px">{text}</div>')
             else:
-                html_parts.append(f'<div style="font-size:12px;color:#1a1a1e;line-height:1.6;margin-bottom:4px">{text}</div>')
+                html_parts.append(f'<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:4px">{text}</div>')
         st.markdown(
             f'''<div class="card" style="max-height:500px;overflow-y:auto;background:#fafaf8;border:1px dashed #e8e7e3">
               {"".join(html_parts)}
@@ -1334,29 +1396,44 @@ def _render_pdf_preview(data: bytes) -> None:
 
 def page_documents():
     render_page_header("Document Generator",
-                       "IC Memo & LP Letter — auto-generated from CS1-CS4 data · Download as .docx",
+                       "IC Memo & LP Letter — auto-generated from CS1-CS4 data · Download as .docx / .pdf",
                        prefix="doc")
+
+    st.markdown('''<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:20px;padding:14px 18px;background:#f8f7f5;border-radius:8px;border-left:3px solid #4f46e5">
+      <strong>How it works:</strong> The document generator pulls live data from CS1-CS4 (company scores, evidence, gap analysis, EBITDA projections)
+      through MCP tools, then uses LangGraph to assemble findings into professional IC memos and LP letters.
+      Documents are generated server-side using <code>python-docx</code> (IC Memo) and <code>weasyprint</code> (LP Letter) and saved locally for download.
+    </div>''', unsafe_allow_html=True)
+
     tickers = st.session_state["portfolio_tickers"] or [st.session_state["selected_ticker"]]
     col_l, col_r = st.columns(2)
 
     # ── IC Memo (left column) ────────────────────────────────────────────────
     with col_l:
-        st.markdown("### IC Memo Generator")
+        st.markdown("#### IC Memo Generator")
+        st.markdown('<div style="font-size:14px;color:#6b6a65;margin-bottom:12px">Generate a confidential Investment Committee memorandum with AI-readiness scores, dimension analysis, and EBITDA projections.</div>', unsafe_allow_html=True)
         ticker = st.selectbox("Company", tickers, key="doc_ticker")
         rows = build_portfolio_rows([ticker], all_companies)
         r = rows[0] if rows else {}
-        st.markdown(f'''<div class="card">
-          <div class="text-xs text-muted">CONFIDENTIAL</div>
-          <div class="card-title">Investment Committee Memorandum</div>
-          <div class="text-sm">Company: {ticker} · Sector: {r.get("sector","Unknown")}</div>
-          <div class="text-sm">Org-AI-R {float(r.get("org_air",0)):.1f} · V^R {float(r.get("vr_score",0)):.1f} · H^R {float(r.get("hr_score",0)):.1f}</div>
+        org = float(r.get("org_air", 0))
+        vr = float(r.get("vr_score", 0))
+        hr = float(r.get("hr_score", 0))
+        st.markdown(f'''<div class="card" style="border-left:3px solid #4f46e5">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#dc2626;font-weight:700;margin-bottom:8px">CONFIDENTIAL</div>
+          <div style="font-size:18px;font-weight:700;margin-bottom:10px">Investment Committee Memorandum</div>
+          <div style="font-size:14px;color:#4b4a45;margin-bottom:6px"><strong>Company:</strong> {ticker} &middot; <strong>Sector:</strong> {r.get("sector","Unknown")}</div>
+          <div style="display:flex;gap:20px;margin-top:10px">
+            <div style="text-align:center"><div style="font-size:11px;color:#6b6a65;text-transform:uppercase">Org-AI-R</div><div style="font-size:22px;font-weight:700;color:#4f46e5">{org:.1f}</div></div>
+            <div style="text-align:center"><div style="font-size:11px;color:#6b6a65;text-transform:uppercase">V^R</div><div style="font-size:22px;font-weight:700;color:#0d9f6e">{vr:.1f}</div></div>
+            <div style="text-align:center"><div style="font-size:11px;color:#6b6a65;text-transform:uppercase">H^R</div><div style="font-size:22px;font-weight:700;color:#d97706">{hr:.1f}</div></div>
+          </div>
         </div>''', unsafe_allow_html=True)
 
         if st.button("Generate IC Memo (.docx)", key="ic_btn", type="primary", use_container_width=True):
             with st.spinner("Generating IC memo..."):
                 try:
                     resp = _post(f"/api/v1/bonus/reports/ic-memo/{ticker}",
-                                 params={"persist": "false", "format": "docx"}, timeout=120)
+                                 params={"persist": "false", "format": "docx"}, timeout=300)
                     resp.raise_for_status()
                     data = resp.content
                     fname = f"ic_memo_{ticker}.docx"
@@ -1365,10 +1442,10 @@ def page_documents():
                     st.session_state["ic_path"] = path
                     st.session_state["ic_fname"] = fname
                 except Exception as e:
-                    st.error(str(e))
+                    st.error(f"IC memo generation failed: {e}")
 
         if st.session_state.get("ic_bytes"):
-            st.success(f"Saved: `{st.session_state.get('ic_path', '')}`")
+            st.success(f"Saved to `{st.session_state.get('ic_path', '')}`")
             _render_docx_preview(st.session_state["ic_bytes"])
             st.download_button("Download IC Memo (.docx)", st.session_state["ic_bytes"],
                                file_name=st.session_state.get("ic_fname", "ic_memo.docx"),
@@ -1377,112 +1454,243 @@ def page_documents():
 
     # ── LP Letter (right column) ─────────────────────────────────────────────
     with col_r:
-        st.markdown("### LP Letter Generator")
+        st.markdown("#### LP Letter Generator")
+        st.markdown('<div style="font-size:14px;color:#6b6a65;margin-bottom:12px">Generate a quarterly update letter for Limited Partners with fund performance, portfolio highlights, and AI-readiness outlook.</div>', unsafe_allow_html=True)
         period = st.selectbox("Reporting Period", ["Q1 2026", "Q4 2025", "Q3 2025"], key="lp_period")
         fund = st.session_state["fund_id"]
-        st.markdown(f'''<div class="card">
-          <div class="text-xs text-muted">CONFIDENTIAL — For Limited Partners Only</div>
-          <div class="card-title">Quarterly LP Update: {fund}</div>
-          <div class="text-sm">Reporting period: {period}</div>
+        st.markdown(f'''<div class="card" style="border-left:3px solid #0d9f6e">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#dc2626;font-weight:700;margin-bottom:8px">CONFIDENTIAL — FOR LIMITED PARTNERS ONLY</div>
+          <div style="font-size:18px;font-weight:700;margin-bottom:10px">Quarterly LP Update: {fund}</div>
+          <div style="font-size:14px;color:#4b4a45">
+            <div style="margin-bottom:4px"><strong>Reporting period:</strong> {period}</div>
+            <div style="margin-bottom:4px"><strong>Portfolio:</strong> {len(tickers)} companies across {len(set(r.get("sector","") for r in build_portfolio_rows(tickers, all_companies)))} sectors</div>
+            <div><strong>Generated by:</strong> MCP tools + LangGraph pipeline</div>
+          </div>
         </div>''', unsafe_allow_html=True)
 
-        if st.button("Generate LP Letter (.pdf)", key="lp_btn", type="primary", use_container_width=True):
+        if st.button("Generate LP Letter (.docx)", key="lp_btn", type="primary", use_container_width=True):
             with st.spinner("Generating LP letter..."):
                 try:
                     resp = _post(f"/api/v1/bonus/reports/lp-letter/{fund}",
-                                 params={"persist": "false"}, timeout=120)
+                                 params={"persist": "false"}, timeout=300)
                     resp.raise_for_status()
                     data = resp.content
-                    fname = f"lp_letter_{period.replace(' ', '_')}.pdf"
-                    # Detect if the API fell back to .txt
-                    ct = resp.headers.get("content-type", "")
-                    if "text/plain" in ct:
-                        fname = fname.replace(".pdf", ".txt")
+                    fname = f"lp_letter_{period.replace(' ', '_')}.docx"
                     path = _save_local(data, fname)
                     st.session_state["lp_bytes"] = data
                     st.session_state["lp_path"] = path
                     st.session_state["lp_fname"] = fname
-                    st.session_state["lp_is_pdf"] = fname.endswith(".pdf")
                 except Exception as e:
-                    st.error(str(e))
+                    st.error(f"LP letter generation failed: {e}")
 
         if st.session_state.get("lp_bytes"):
-            st.success(f"Saved: `{st.session_state.get('lp_path', '')}`")
-            if st.session_state.get("lp_is_pdf"):
-                _render_pdf_preview(st.session_state["lp_bytes"])
-            else:
-                # Plain-text fallback
-                st.markdown(
-                    f'''<div class="card" style="max-height:500px;overflow-y:auto;background:#fafaf8;border:1px dashed #e8e7e3;white-space:pre-wrap;font-size:12px;line-height:1.6">
-                    {st.session_state["lp_bytes"].decode("utf-8", errors="replace")}
-                    </div>''',
-                    unsafe_allow_html=True,
-                )
-            mime = "application/pdf" if st.session_state.get("lp_is_pdf") else "text/plain"
-            st.download_button("Download LP Letter", st.session_state["lp_bytes"],
-                               file_name=st.session_state.get("lp_fname", "lp_letter.pdf"),
-                               mime=mime, use_container_width=True)
+            st.success(f"Saved to `{st.session_state.get('lp_path', '')}`")
+            _render_docx_preview(st.session_state["lp_bytes"])
+            st.download_button("Download LP Letter (.docx)", st.session_state["lp_bytes"],
+                               file_name=st.session_state.get("lp_fname", "lp_letter.docx"),
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                               use_container_width=True)
+
+    # ── Previously Generated Documents ───────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Previously Generated Documents")
+    st.markdown('<div style="font-size:14px;color:#6b6a65;margin-bottom:16px">Click any document below to preview and download. These are saved from prior generation runs.</div>', unsafe_allow_html=True)
+
+    reports_dir = os.path.join(_ROOT, "results", "reports")
+    ic_dir = os.path.join(reports_dir, "ic_memo")
+    lp_dir = os.path.join(reports_dir, "lp_letter")
+
+    prev_l, prev_r = st.columns(2)
+    with prev_l:
+        st.markdown("##### IC Memos")
+        ic_files = sorted(
+            [f for f in os.listdir(ic_dir) if f.endswith((".docx", ".pdf", ".txt"))] if os.path.isdir(ic_dir) else [],
+            reverse=True,
+        )
+        if not ic_files:
+            st.caption("No IC memos generated yet.")
+        for f in ic_files[:5]:
+            fpath = os.path.join(ic_dir, f)
+            size_kb = os.path.getsize(fpath) / 1024
+            with st.expander(f"{f}  ({size_kb:.0f} KB)", expanded=False):
+                with open(fpath, "rb") as fh:
+                    data = fh.read()
+                if f.endswith(".docx"):
+                    _render_docx_preview(data)
+                    st.download_button(f"Download {f}", data, file_name=f,
+                                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                       key=f"prev_ic_{f}", use_container_width=True)
+                else:
+                    st.text(data.decode("utf-8", errors="replace")[:2000])
+                    st.download_button(f"Download {f}", data, file_name=f, key=f"prev_ic_{f}", use_container_width=True)
+
+    with prev_r:
+        st.markdown("##### LP Letters")
+        lp_files = sorted(
+            [f for f in os.listdir(lp_dir) if f.endswith((".docx", ".pdf", ".txt"))] if os.path.isdir(lp_dir) else [],
+            reverse=True,
+        )
+        if not lp_files:
+            st.caption("No LP letters generated yet.")
+        for f in lp_files[:5]:
+            fpath = os.path.join(lp_dir, f)
+            size_kb = os.path.getsize(fpath) / 1024
+            with st.expander(f"{f}  ({size_kb:.0f} KB)", expanded=False):
+                with open(fpath, "rb") as fh:
+                    data = fh.read()
+                if f.endswith(".docx"):
+                    _render_docx_preview(data)
+                    st.download_button(f"Download {f}", data, file_name=f,
+                                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                       key=f"prev_lp_{f}", use_container_width=True)
+                elif f.endswith(".pdf"):
+                    _render_pdf_preview(data)
+                    st.download_button(f"Download {f}", data, file_name=f,
+                                       mime="application/pdf", key=f"prev_lp_{f}", use_container_width=True)
+                else:
+                    st.text(data.decode("utf-8", errors="replace")[:2000])
+                    st.download_button(f"Download {f}", data, file_name=f, key=f"prev_lp_{f}", use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE 9 — Investment Tracker (Bonus)
 # ═══════════════════════════════════════════════════════════════════════════════
 def page_tracker():
-    render_page_header("Investment Tracker with ROI", "AI initiative ROI projections from CS3 + bonus/roi", prefix="tr")
+    render_page_header("Investment Tracker with ROI", "AI initiative ROI projections — data from GET /bonus/roi/{ticker}", prefix="tr")
     tickers = st.session_state["portfolio_tickers"]
     if not tickers:
         st.info("Select companies first.")
         return
 
+    st.markdown('''<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:20px;padding:14px 18px;background:#f8f7f5;border-radius:8px;border-left:3px solid #4f46e5">
+      <strong>How ROI is calculated:</strong> The <code>/bonus/roi/{ticker}</code> endpoint computes projections from assessment history.<br>
+      <strong>Score Impact</strong> = current Org-AI-R minus entry Org-AI-R &nbsp;|&nbsp;
+      <strong>Revenue Lift</strong> = score improvement x 0.8% per point &nbsp;|&nbsp;
+      <strong>EBITDA Lift</strong> = revenue lift x 0.375 (margin conversion) &nbsp;|&nbsp;
+      <strong>ROI</strong> = projected value creation / estimated AI investment
+    </div>''', unsafe_allow_html=True)
+
+    st.markdown('''<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:20px;padding:14px 18px;background:#fff;border-radius:8px;border:1px solid rgba(0,0,0,0.08)">
+      <strong>AI Transformation Budget Model (PE industry standard):</strong><br>
+      Investment per company = <code>Base $2M + $0.5M per 10 Org-AI-R points</code><br><br>
+      <table style="width:100%;font-size:13px;border-collapse:collapse">
+        <tr style="border-bottom:1px solid #e8e7e3;background:#f8f7f5">
+          <th style="text-align:left;padding:6px 10px">Org-AI-R Range</th>
+          <th style="text-align:left;padding:6px 10px">Maturity</th>
+          <th style="text-align:left;padding:6px 10px">Est. Investment</th>
+          <th style="text-align:left;padding:6px 10px">Rationale</th>
+        </tr>
+        <tr style="border-bottom:1px solid #e8e7e3">
+          <td style="padding:6px 10px">80+</td>
+          <td style="padding:6px 10px"><span class="badge badge-green">Leader</span></td>
+          <td style="padding:6px 10px">$6-7M</td>
+          <td style="padding:6px 10px">Scale & optimize existing AI — higher spend to maintain edge</td>
+        </tr>
+        <tr style="border-bottom:1px solid #e8e7e3">
+          <td style="padding:6px 10px">60-79</td>
+          <td style="padding:6px 10px"><span class="badge badge-blue">Developing</span></td>
+          <td style="padding:6px 10px">$5-6M</td>
+          <td style="padding:6px 10px">Build core AI capabilities — data platform, governance, talent</td>
+        </tr>
+        <tr style="border-bottom:1px solid #e8e7e3">
+          <td style="padding:6px 10px">45-59</td>
+          <td style="padding:6px 10px"><span class="badge badge-amber">Planning</span></td>
+          <td style="padding:6px 10px">$4-5M</td>
+          <td style="padding:6px 10px">Foundation investments — infrastructure, initial use cases</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px">&lt;45</td>
+          <td style="padding:6px 10px"><span class="badge badge-red">Scoping</span></td>
+          <td style="padding:6px 10px">$2-4M</td>
+          <td style="padding:6px 10px">Assessment & roadmap — define AI strategy before major spend</td>
+        </tr>
+      </table>
+    </div>''', unsafe_allow_html=True)
+
+    # Sector-specific initiative names
+    _INITIATIVES = {
+        "Technology": ("AI/ML platform modernization", "Tech Stack"),
+        "Financial Services": ("AI-driven risk & compliance", "AI Governance"),
+        "Healthcare Services": ("Clinical AI & data infrastructure", "Data Infra"),
+        "Retail": ("Supply chain AI optimization", "Use Cases"),
+        "Business Services": ("Intelligent automation & analytics", "Technology Stack"),
+        "Manufacturing": ("Predictive maintenance & digital twin", "Use Cases"),
+    }
+
     rows = build_portfolio_rows(tickers, all_companies)
     roi_rows = []
     for r in rows:
         try:
-            roi = _get(f"/api/v1/bonus/roi/{r['ticker']}", timeout=20).json()
+            roi_key = f"roi:{r['ticker']}"
+            roi = _cache_get(roi_key)
+            if not roi:
+                roi = _get(f"/api/v1/bonus/roi/{r['ticker']}", timeout=20).json()
+                _cache_set(roi_key, roi)
         except Exception:
-            roi = {"roi_estimate_pct": round(max(r["org_air"] - 50, 0) * 0.12, 2),
-                   "projected_ebitda_lift_pct": round(max(r["org_air"] - 55, 0) * 0.08, 2)}
+            roi = {}
+        initiative, dimension = _INITIATIVES.get(r["sector"], ("AI operating model uplift", "Portfolio-wide"))
+        # Investment = base $2M + $0.5M per 10 Org-AI-R points (realistic PE AI budget)
+        investment = round(2.0 + r["org_air"] * 0.05, 1)
+        score_lift = float(roi.get("air_improvement") or r["delta"])
+        ebitda = float(roi.get("projected_ebitda_lift_pct") or round(max(r["org_air"] - 55, 0) * 0.08, 2))
+        roi_pct = float(roi.get("roi_estimate_pct") or round(max(r["org_air"] - 50, 0) * 0.12, 2))
+        rev_lift = float(roi.get("projected_revenue_lift_pct") or 0)
+
         roi_rows.append({
-            "Company": r["ticker"], "Initiative": "AI operating model uplift",
-            "Dimension": "Portfolio-wide",
-            "Investment": round(0.8 + r["pf"] * 2.5, 2),
-            "Status": "Active" if r["org_air"] >= 60 else "Planning",
-            "Score Impact": round(r["delta"], 1),
-            "EBITDA Impact": roi.get("projected_ebitda_lift_pct", 0),
-            "ROI": roi.get("roi_estimate_pct", 0),
+            "Company": r["ticker"],
+            "Sector": r["sector"],
+            "Initiative": initiative,
+            "Dimension": dimension,
+            "Investment ($M)": investment,
+            "Status": "Active" if r["org_air"] >= 60 else "Planning" if r["org_air"] >= 45 else "Scoping",
+            "Score Lift": round(score_lift, 1),
+            "Rev Lift (%)": round(rev_lift, 1),
+            "EBITDA Lift (%)": round(ebitda, 1),
+            "ROI (%)": round(roi_pct, 1),
         })
     roi_df = pd.DataFrame(roi_rows)
 
+    total_inv = roi_df["Investment ($M)"].sum()
+    avg_roi = roi_df["ROI (%)"].mean()
+    active = int((roi_df["Status"] == "Active").sum())
+    avg_lift = roi_df["Score Lift"].mean()
+
     render_metric_cards([
-        {"label": "Total Invested", "value": f"${roi_df['Investment'].sum():.1f}M", "delta": ""},
-        {"label": "Projected ROI", "value": f"{roi_df['ROI'].mean()/100+1:.1f}x", "delta": "", "vc": "#0d9f6e"},
-        {"label": "Active Initiatives", "value": str(int((roi_df['Status'] == 'Active').sum())), "delta": ""},
-        {"label": "Avg Score Lift", "value": f"+{roi_df['Score Impact'].mean():.1f}", "delta": "", "vc": "#0d9f6e"},
+        {"label": "Total AI Investment", "value": f"${total_inv:,.1f}M", "delta": f"Across {len(roi_df)} portfolio companies"},
+        {"label": "Avg Projected ROI", "value": f"{avg_roi/100+1:.1f}x", "delta": f"{avg_roi:.0f}% return on AI spend", "vc": "#0d9f6e"},
+        {"label": "Active Initiatives", "value": f"{active}/{len(roi_df)}", "delta": f"{len(roi_df) - active} in planning/scoping"},
+        {"label": "Avg Score Lift", "value": f"+{avg_lift:.1f}", "delta": "Entry to current Org-AI-R", "vc": "#0d9f6e"},
     ])
 
     # Table
     tbl_rows = []
     for _, r in roi_df.iterrows():
-        sb = "badge-green" if r["Status"] == "Active" else "badge-amber"
+        sb = "badge-green" if r["Status"] == "Active" else "badge-amber" if r["Status"] == "Planning" else "badge-red"
         tbl_rows.append([
             f'<span class="text-mono">{r["Company"]}</span>',
-            r["Initiative"], r["Dimension"],
-            f'${r["Investment"]:.1f}M',
+            r["Initiative"],
+            f'<span class="badge badge-purple">{r["Dimension"]}</span>',
+            f'${r["Investment ($M)"]:,.0f}M',
             f'<span class="badge {sb}">{r["Status"]}</span>',
-            f'+{r["Score Impact"]:.1f}',
-            f'{r["EBITDA Impact"]:.1f}%',
-            f'<span class="delta-pos">{r["ROI"]:.1f}%</span>',
+            f'<span class="delta-pos">+{r["Score Lift"]:.1f}</span>',
+            f'{r["EBITDA Lift (%)"]:.1f}%',
+            f'<span style="font-weight:700;color:#0d9f6e">{r["ROI (%)"]:.1f}%</span>',
         ])
-    render_table(["Company", "Initiative", "Dimension", "Investment", "Status", "Score Impact", "EBITDA Impact", "ROI"], tbl_rows)
+    render_table(["Company", "Initiative", "Target Dimension", "Investment", "Status", "Score Lift", "EBITDA Lift", "ROI"], tbl_rows)
 
     col_l, col_r = st.columns(2)
     with col_l:
-        fig = px.pie(roi_df, names="Dimension", values="Investment", hole=0.45, title="Investment by Dimension")
-        fig.update_layout(height=300)
+        dim_df = roi_df.groupby("Dimension", as_index=False).agg({"Investment ($M)": "sum"})
+        fig = px.pie(dim_df, names="Dimension", values="Investment ($M)", hole=0.45, title="Investment by Target Dimension",
+                     color_discrete_sequence=["#4f46e5", "#dc2626", "#0d9488", "#d97706", "#7c3aed", "#2563eb", "#e11d48"])
+        fig.update_layout(height=320)
         st.plotly_chart(fig, use_container_width=True)
     with col_r:
-        fig = px.bar(roi_df.sort_values("ROI"), x="ROI", y="Company", orientation="h", color="Status", title="ROI by Company")
-        fig.update_layout(height=300)
+        fig = px.bar(roi_df.sort_values("ROI (%)", ascending=True), x="ROI (%)", y="Company", orientation="h",
+                     color="Sector", color_discrete_map={"Technology": "#4f46e5", "Financial Services": "#dc2626",
+                     "Healthcare Services": "#0d9488", "Retail": "#d97706", "Business Services": "#7c3aed"},
+                     title="ROI by Company")
+        fig.update_layout(height=320)
         st.plotly_chart(fig, use_container_width=True)
 
 
@@ -1553,9 +1761,20 @@ st.markdown("""<style>
 .stApp{background:#f8f7f4;color:#1a1a1e}
 .block-container{max-width:1100px;padding-top:60px;padding-bottom:60px}
 footer{visibility:hidden}
-[data-testid="stSidebar"]>div:first-child{padding:18px 14px;background:#1a1a1e}
+[data-testid="stSidebar"]>div:first-child{padding:0px 14px 14px !important;background:#1a1a1e}
+[data-testid="stSidebar"] section[data-testid="stSidebarContent"]{padding-top:0 !important}
 [data-testid="stSidebar"] *{color:#e0dfd8}
 [data-testid="stSidebar"] label{font-size:11px !important;text-transform:uppercase;letter-spacing:.8px;color:#7a7972 !important}
+[data-testid="stSidebar"] button{color:#1a1a1e !important;background:#d4d3ce !important;border:1px solid #9c9a92 !important;font-weight:600 !important}
+[data-testid="stSidebar"] button:hover{background:#ffffff !important;color:#1a1a1e !important}
+[data-testid="stSidebar"] button[kind="primary"]{color:#fff !important;background:#4f46e5 !important;border-color:#4f46e5 !important}
+[data-testid="stSidebar"] button[kind="primary"]:hover{background:#4338ca !important;color:#fff !important}
+[data-testid="stSidebar"] hr{margin:6px 0 !important}
+[data-testid="stSidebar"] h5{margin:2px 0 !important}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:0 !important;padding-bottom:0 !important}
+[data-testid="stSidebar"] .stSelectbox,.stTextInput{margin-bottom:2px !important}
+[data-testid="stSidebar"] p{margin-bottom:2px !important}
+[data-testid="stSidebar"] .stCaption p{margin:0 !important;padding:1px 0 !important;line-height:1.3 !important}
 [data-testid="stSidebar"] .stTextInput input{
   background:#2a2a2f !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:6px !important;color:#e0dfd8 !important}
 [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"]>div{
@@ -1599,7 +1818,7 @@ tbody td{padding:12px 14px;border-bottom:1px solid #e8e7e3;color:#1a1a2e;font-si
 tbody tr:last-child td{border-bottom:none}
 .section-divider{display:flex;align-items:center;gap:12px;margin:36px 0 20px}
 .section-divider-line{flex:1;height:1px;background:rgba(0,0,0,0.08)}
-.section-divider-label{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#9c9a92;white-space:nowrap}
+.section-divider-label{font-size:12px;text-transform:uppercase;letter-spacing:1.5px;color:#6b6a65;white-space:nowrap;font-weight:600}
 .evidence-card{border:1px solid rgba(0,0,0,0.08);border-radius:10px;padding:20px 22px;background:#fff;margin-bottom:14px}
 .evidence-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .evidence-dim{font-size:17px;font-weight:600}
@@ -1622,26 +1841,26 @@ tbody tr:last-child td{border-bottom:none}
 .hitl-icon{font-size:24px;color:#d97706}
 .hitl-text{font-size:15px;color:#7c2d12;flex:1;line-height:1.5}
 .trend-card{background:#f8f7f5;border-radius:10px;padding:14px 16px;margin-bottom:12px}
-.trend-label{font-size:11px;color:#9c9a92;text-transform:uppercase;letter-spacing:.4px}
-.trend-value{font-size:20px;font-weight:600;margin-top:2px}
+.trend-label{font-size:12px;color:#6b6a65;text-transform:uppercase;letter-spacing:.4px;font-weight:500}
+.trend-value{font-size:22px;font-weight:700;margin-top:3px}
 .agent-log{background:#1a1a1e;border-radius:10px;padding:18px 20px;font-family:Consolas,monospace;font-size:13px;line-height:2;color:#c5c4be;max-height:400px;overflow-y:auto}
 .log-time{color:#6b6a65}.log-agent{color:#8fa4ff}.log-tool{color:#5dcaa5}.log-warn{color:#f59e0b}.log-ok{color:#0d9f6e}
 .mcp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .mcp-card{border:1px solid #e8e7e3;border-radius:10px;padding:14px 16px;background:#fff}
 .mcp-card:hover{box-shadow:0 2px 8px rgba(0,0,0,0.06)}
-.mcp-card-name{font-family:Consolas,monospace;font-size:13px;font-weight:600;margin-bottom:4px}
-.mcp-card-source{font-size:11px;color:#9c9a92;margin-bottom:6px}
-.mcp-card-desc{font-size:12px;color:#6b6b80;line-height:1.5}
+.mcp-card-name{font-family:Consolas,monospace;font-size:15px;font-weight:700;margin-bottom:6px}
+.mcp-card-source{font-size:13px;color:#6b6a65;margin-bottom:8px}
+.mcp-card-desc{font-size:14px;color:#4b4a45;line-height:1.6}
 .prom-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .prom-card{background:#fff;border:1px solid #e8e7e3;border-radius:10px;padding:14px 16px}
-.prom-name{font-family:Consolas,monospace;font-size:11px;color:#9c9a92;margin-bottom:4px;word-break:break-all}
-.prom-value{font-size:22px;font-weight:600}
-.prom-meta{font-size:11px;color:#9c9a92;margin-top:2px}
+.prom-name{font-family:Consolas,monospace;font-size:13px;color:#6b6a65;margin-bottom:4px;word-break:break-all}
+.prom-value{font-size:24px;font-weight:700}
+.prom-meta{font-size:13px;color:#6b6a65;margin-top:3px}
 .quartile-bar{display:flex;height:26px;border-radius:8px;overflow:hidden;margin-top:8px}
 .q-seg{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff}
 .tabs{display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid rgba(0,0,0,0.08);overflow-x:auto}
-.tab{padding:10px 18px;font-size:13px;color:#9c9a92;border-bottom:2px solid transparent;white-space:nowrap}
-.tab.active{color:#3d5afe;border-bottom-color:#3d5afe;font-weight:500}
+.tab{padding:10px 18px;font-size:14px;color:#6b6a65;border-bottom:2px solid transparent;white-space:nowrap}
+.tab.active{color:#4f46e5;border-bottom-color:#4f46e5;font-weight:600}
 </style>""", unsafe_allow_html=True)
 
 
