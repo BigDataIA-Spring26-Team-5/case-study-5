@@ -51,6 +51,12 @@ except ModuleNotFoundError:  # pragma: no cover
         arguments: list
 
     @dataclass
+    class _PromptArgument:
+        name: str
+        description: str
+        required: bool = False
+
+    @dataclass
     class _PromptMessage:
         role: str
         content: _Any
@@ -65,6 +71,7 @@ except ModuleNotFoundError:  # pragma: no cover
         TextContent=_TextContent,
         Resource=_Resource,
         Prompt=_Prompt,
+        PromptArgument=_PromptArgument,
         PromptMessage=_PromptMessage,
         GetPromptResult=_GetPromptResult,
     )
