@@ -45,23 +45,20 @@ _settings = get_settings()
 
 
 def _track_agent(name: str, status: str, duration_s: float) -> None:
-    """Best-effort Prometheus metric recording for agent nodes."""
+    """Best-effort Prometheus metric recording for agent nodes — persisted to Redis."""
     try:
-        from app.services.observability.metrics import (
-            agent_invocations_total,
-            agent_duration_seconds,
-        )
-        agent_invocations_total.labels(agent_name=name, status=status).inc()
+        from app.services.observability.metrics import _inc_agent, agent_duration_seconds
+        _inc_agent(name, status)
         agent_duration_seconds.labels(agent_name=name).observe(duration_s)
     except Exception:
         pass
 
 
 def _track_hitl(reason: str, decision: str) -> None:
-    """Best-effort Prometheus metric recording for HITL decisions."""
+    """Best-effort Prometheus metric recording for HITL decisions — persisted to Redis."""
     try:
-        from app.services.observability.metrics import hitl_approvals_total
-        hitl_approvals_total.labels(reason=reason or "unspecified", decision=decision).inc()
+        from app.services.observability.metrics import _inc_hitl
+        _inc_hitl(decision)
     except Exception:
         pass
 

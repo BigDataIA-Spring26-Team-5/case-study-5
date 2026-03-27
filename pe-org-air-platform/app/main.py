@@ -234,12 +234,12 @@ async def prometheus_tracking_middleware(request: Request, call_next):
     """Track every API request as a CS client call in Prometheus."""
     response = await call_next(request)
     try:
-        import app.services.observability.metrics as m
+        from app.services.observability.metrics import _inc_cs
         path = request.url.path
         for prefix, (svc, ep) in _CS_ROUTE_MAP.items():
             if path.startswith(prefix):
                 status = "success" if response.status_code < 400 else "error"
-                m.cs_client_calls_total.labels(service=svc, endpoint=ep, status=status).inc()
+                _inc_cs(svc, ep, status)
                 break
     except Exception:
         pass

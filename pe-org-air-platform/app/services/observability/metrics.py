@@ -69,26 +69,106 @@ cs_client_calls_total = Counter(
 )
 
 
-# ── Pre-initialize all label combinations so /metrics shows them ──────────
+# ── Redis-backed persistence for Prometheus counters ─────────────────────
+# Counters survive server restarts by storing accumulated values in Redis.
+
+def _get_redis():
+    """Best-effort Redis connection for metric persistence."""
+    try:
+        import redis as _redis
+        import os
+        url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+        return _redis.from_url(url, decode_responses=True)
+    except Exception:
+        return None
+
+
+def _load_counter(key: str) -> float:
+    """Load a counter value from Redis."""
+    try:
+        r = _get_redis()
+        if r:
+            val = r.get(f"prom:{key}")
+            return float(val) if val else 0.0
+    except Exception:
+        pass
+    return 0.0
+
+
+def _save_counter(key: str, value: float):
+    """Save a counter value to Redis (no expiry — persists forever)."""
+    try:
+        r = _get_redis()
+        if r:
+            r.set(f"prom:{key}", str(value))
+    except Exception:
+        pass
+
+
 def _init_metrics():
+    """Load persisted counter values from Redis on startup."""
     for tool in _MCP_TOOLS:
-        mcp_tool_calls_total.labels(tool_name=tool, status="success")
-        mcp_tool_calls_total.labels(tool_name=tool, status="error")
+        for status in ("success", "error"):
+            val = _load_counter(f"mcp_tool:{tool}:{status}")
+            if val > 0:
+                mcp_tool_calls_total.labels(tool_name=tool, status=status).inc(val)
+            else:
+                mcp_tool_calls_total.labels(tool_name=tool, status=status)
         mcp_tool_duration_seconds.labels(tool_name=tool)
     for agent in _AGENTS:
-        agent_invocations_total.labels(agent_name=agent, status="success")
-        agent_invocations_total.labels(agent_name=agent, status="error")
+        for status in ("success", "error"):
+            val = _load_counter(f"agent:{agent}:{status}")
+            if val > 0:
+                agent_invocations_total.labels(agent_name=agent, status=status).inc(val)
+            else:
+                agent_invocations_total.labels(agent_name=agent, status=status)
         agent_duration_seconds.labels(agent_name=agent)
-    hitl_approvals_total.labels(reason="score_change", decision="approved")
-    hitl_approvals_total.labels(reason="score_change", decision="rejected")
+    for decision in ("approved", "rejected"):
+        val = _load_counter(f"hitl:{decision}")
+        if val > 0:
+            hitl_approvals_total.labels(reason="score_change", decision=decision).inc(val)
+        else:
+            hitl_approvals_total.labels(reason="score_change", decision=decision)
     for svc, ep in _CS_SERVICES:
-        cs_client_calls_total.labels(service=svc, endpoint=ep, status="success")
-        cs_client_calls_total.labels(service=svc, endpoint=ep, status="error")
+        for status in ("success", "error"):
+            val = _load_counter(f"cs:{svc}:{ep}:{status}")
+            if val > 0:
+                cs_client_calls_total.labels(service=svc, endpoint=ep, status=status).inc(val)
+            else:
+                cs_client_calls_total.labels(service=svc, endpoint=ep, status=status)
 
 _init_metrics()
 
 
 # ── Decorators ───────────────────────────────────────────────────────────────
+
+def _inc_mcp(tool_name: str, status: str):
+    """Increment MCP counter and persist to Redis."""
+    mcp_tool_calls_total.labels(tool_name=tool_name, status=status).inc()
+    cur = mcp_tool_calls_total.labels(tool_name=tool_name, status=status)._value.get()
+    _save_counter(f"mcp_tool:{tool_name}:{status}", cur)
+
+
+def _inc_agent(agent_name: str, status: str):
+    """Increment agent counter and persist to Redis."""
+    agent_invocations_total.labels(agent_name=agent_name, status=status).inc()
+    cur = agent_invocations_total.labels(agent_name=agent_name, status=status)._value.get()
+    _save_counter(f"agent:{agent_name}:{status}", cur)
+
+
+def _inc_cs(service: str, endpoint: str, status: str):
+    """Increment CS client counter and persist to Redis."""
+    cs_client_calls_total.labels(service=service, endpoint=endpoint, status=status).inc()
+    cur = cs_client_calls_total.labels(service=service, endpoint=endpoint, status=status)._value.get()
+    _save_counter(f"cs:{service}:{endpoint}:{status}", cur)
+
+
+def _inc_hitl(decision: str):
+    """Increment HITL counter and persist to Redis."""
+    hitl_approvals_total.labels(reason="score_change", decision=decision).inc()
+    cur = hitl_approvals_total.labels(reason="score_change", decision=decision)._value.get()
+    _save_counter(f"hitl:{decision}", cur)
+
 
 def track_mcp_tool(tool_name: str) -> Callable:
     """Decorator to instrument async MCP tool functions."""
@@ -98,10 +178,10 @@ def track_mcp_tool(tool_name: str) -> Callable:
             start = time.time()
             try:
                 result = await func(*args, **kwargs)
-                mcp_tool_calls_total.labels(tool_name=tool_name, status="success").inc()
+                _inc_mcp(tool_name, "success")
                 return result
             except Exception as e:
-                mcp_tool_calls_total.labels(tool_name=tool_name, status="error").inc()
+                _inc_mcp(tool_name, "error")
                 raise
             finally:
                 duration = time.time() - start
@@ -118,10 +198,10 @@ def track_agent(agent_name: str) -> Callable:
             start = time.time()
             try:
                 result = await func(*args, **kwargs)
-                agent_invocations_total.labels(agent_name=agent_name, status="success").inc()
+                _inc_agent(agent_name, "success")
                 return result
             except Exception as e:
-                agent_invocations_total.labels(agent_name=agent_name, status="error").inc()
+                _inc_agent(agent_name, "error")
                 raise
             finally:
                 duration = time.time() - start
@@ -137,14 +217,10 @@ def track_cs_client(service: str, endpoint: str) -> Callable:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 result = func(*args, **kwargs)
-                cs_client_calls_total.labels(
-                    service=service, endpoint=endpoint, status="success"
-                ).inc()
+                _inc_cs(service, endpoint, "success")
                 return result
             except Exception as e:
-                cs_client_calls_total.labels(
-                    service=service, endpoint=endpoint, status="error"
-                ).inc()
+                _inc_cs(service, endpoint, "error")
                 raise
         return wrapper
     return decorator
