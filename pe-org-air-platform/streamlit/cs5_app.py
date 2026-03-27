@@ -607,18 +607,35 @@ def page_evidence():
     ticker = st.session_state["selected_ticker"]
     render_page_header(
         f"Evidence analysis: {ticker}",
-        "render_company_evidence_panel() — CS4 RAG justifications across 7 dimensions",
+        "CS4 RAG justifications across 7 Org-AI-R dimensions",
         prefix="ev",
     )
 
+    # Use evidence_display.py for generate/fetch UI only
     cache_key = f"justifications_{ticker}"
     justifications = st.session_state.get(cache_key)
-    render_company_evidence_panel(ticker, justifications)
-    justifications = st.session_state.get(cache_key, {})
 
+    # Show generate buttons if no justifications cached
+    if justifications is None:
+        from evidence_display import fetch_all_justifications, DIMENSIONS
+        col_btn, col_clear = st.columns([2, 1])
+        with col_btn:
+            if st.button("Generate All 7 Dimensions", key=f"gen_all_{ticker}", type="primary", use_container_width=True):
+                justifications = fetch_all_justifications(ticker)
+                st.session_state[cache_key] = justifications
+        with col_clear:
+            if st.button("Clear Cache", key=f"clear_{ticker}", use_container_width=True):
+                for dim in DIMENSIONS:
+                    st.session_state.pop(f"justification_{ticker}_{dim}", None)
+                st.session_state.pop(cache_key, None)
+                st.rerun()
+
+    justifications = st.session_state.get(cache_key, {})
     if not justifications:
+        st.info("Click **Generate All 7 Dimensions** to fetch evidence from CS4 RAG.")
         return
 
+    # ── Metric cards ─────────────────────────────────────────────────────────
     total_ev = sum(len(j.get("supporting_evidence", [])) for j in justifications.values())
     levels = [float(j.get("level", 0)) for j in justifications.values()]
     strong = sum(1 for j in justifications.values() if j.get("evidence_strength") == "strong")
@@ -631,8 +648,8 @@ def page_evidence():
         {"label": "Gaps found", "value": str(total_gaps), "delta": ""},
     ])
 
-    # Dimension summary table
-    st.markdown('<div class="card-title mb-8">Dimension summary (render_evidence_summary_table)</div>', unsafe_allow_html=True)
+    # ── Dimension summary table ──────────────────────────────────────────────
+    st.markdown('<div class="card-title mb-8">Dimension summary</div>', unsafe_allow_html=True)
     summary_rows = []
     for dim, item in justifications.items():
         lv = int(item.get("level", 0))
@@ -649,7 +666,7 @@ def page_evidence():
         ])
     render_table(["Dimension", "Score", "Level", "Evidence", "Items", "Gaps"], summary_rows)
 
-    # Dimension tabs with evidence cards
+    # ── Dimension tabs with evidence cards ───────────────────────────────────
     tab_labels = [d.replace("_", " ").title() for d in justifications.keys()]
     tabs = st.tabs(tab_labels)
     for tab, (dim, item) in zip(tabs, justifications.items()):
@@ -669,26 +686,26 @@ def page_evidence():
                 <div class="flex items-center gap-8">
                   <span class="evidence-dim">{dim.replace("_"," ").title()}</span>
                   <span class="badge {lb}">L{lv} — {item.get("level_name","")}</span>
-                  <span style="font-size:16px;font-weight:600">{float(item.get("score",0)):.1f}</span>
+                  <span style="font-size:17px;font-weight:700">{float(item.get("score",0)):.1f}</span>
                 </div>
                 <span class="badge {stb}">{strength} evidence</span>
               </div>
               <div class="rubric-box"><strong>Rubric match:</strong> {item.get("rubric_criteria","")}</div>
-              <div style="font-size:12px;font-weight:500;color:var(--text-2,#6b6a65);margin-bottom:6px">Supporting evidence (from CS4 RAG — justification.supporting_evidence[:5])</div>
+              <div style="font-size:13px;font-weight:600;color:#4b4a45;margin-bottom:8px">Supporting evidence (from CS4 RAG)</div>
               <ul class="evidence-list">{ev_html}</ul>
-              <div class="gap-list"><span style="font-size:12px;font-weight:500;color:#92400e">Gaps identified:</span>{gaps_html}</div>
+              <div class="gap-list"><span style="font-size:13px;font-weight:600;color:#7c2d12">Gaps identified:</span> {gaps_html}</div>
             </div>''', unsafe_allow_html=True)
 
-    # Radar chart
+    # ── Radar chart ──────────────────────────────────────────────────────────
     dim_labels = [d.replace("_", " ").title() for d in justifications.keys()]
     scores = [float(j.get("score", 0)) for j in justifications.values()]
     targets = [float(_DIMENSION_TARGETS.get(l, 70)) for l in dim_labels]
     if dim_labels:
         radar = go.Figure()
         radar.add_trace(go.Scatterpolar(r=scores + [scores[0]], theta=dim_labels + [dim_labels[0]],
-                                         fill="toself", name=ticker, line=dict(color="#6366f1")))
+                                         fill="toself", name=ticker, line=dict(color="#4f46e5")))
         radar.add_trace(go.Scatterpolar(r=targets + [targets[0]], theta=dim_labels + [dim_labels[0]],
-                                         name="Target", line=dict(color="#f59e0b", dash="dash")))
+                                         name="Target", line=dict(color="#d97706", dash="dash")))
         radar.update_layout(height=420, polar=dict(radialaxis=dict(visible=True, range=[0, 100])))
         st.plotly_chart(radar, use_container_width=True)
 
