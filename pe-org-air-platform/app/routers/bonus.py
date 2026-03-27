@@ -13,7 +13,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 
 from app.core.dependencies import (
@@ -210,10 +210,18 @@ async def generate_lp_letter(
     from app.services.reporting.lp_letter import lp_letter_generator
     from app.services.analytics.fund_air import FundAIRCalculator
     from types import SimpleNamespace
+    import traceback as _tb
 
     fund_id = (fund_id or "PE-FUND-I").strip()
-    portfolio = portfolio_svc.get_portfolio_view(fund_id)
+
+    try:
+        portfolio = portfolio_svc.get_portfolio_view(fund_id)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Portfolio '{fund_id}' not found or inaccessible: {exc}")
+
     companies = portfolio.get("companies", [])
+    if not companies:
+        raise HTTPException(status_code=422, detail=f"Portfolio '{fund_id}' has no companies. Add companies first.")
 
     # Calculate CS5 fund metrics
     company_objs = [
@@ -225,8 +233,12 @@ async def generate_lp_letter(
         )
         for c in companies
     ]
-    metrics = FundAIRCalculator().calculate_fund_metrics(fund_id, company_objs)
-    metrics_dict = metrics.to_dict()
+
+    try:
+        metrics = FundAIRCalculator().calculate_fund_metrics(fund_id, company_objs)
+        metrics_dict = metrics.to_dict()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Fund metrics calculation failed: {exc}")
 
     company_scores = [
         {"ticker": c.get("ticker"), "org_air": float(c.get("org_air") or 0.0), "sector": c.get("sector") or ""}
@@ -236,14 +248,18 @@ async def generate_lp_letter(
 
     out_path = os.path.join(
         _reports_subdir("lp_letter"),
-        f"lp_letter_{fund_id}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.pdf",
+        f"lp_letter_{fund_id}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.docx",
     )
-    path = lp_letter_generator.generate(
-        fund_id=fund_id,
-        fund_metrics=metrics_dict,
-        company_scores=company_scores,
-        output_path=out_path,
-    )
+
+    try:
+        path = lp_letter_generator.generate(
+            fund_id=fund_id,
+            fund_metrics=metrics_dict,
+            company_scores=company_scores,
+            output_path=out_path,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"LP letter generation failed: {exc}\n{_tb.format_exc()}")
 
     if not persist:
         if background is None:
