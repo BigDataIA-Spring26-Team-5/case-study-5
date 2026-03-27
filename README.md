@@ -17,6 +17,7 @@ Multi-agent due diligence platform that extends CS1–CS4's scoring and RAG pipe
 | **Project Codelabs** | [CS5 Walkthrough](https://codelabs-preview.appspot.com/?file_id=16_uZuNqImUhPztCSOeEnVWznIwW3TT5R477rsmvLrSA#2) |
 | **Demo Video** | [SharePoint Video](https://northeastern-my.sharepoint.com/) |
 | **Streamlit Deployed UI** | [pe-org-air-platform.streamlit.app](https://pe-org-air-platform.streamlit.app/) |
+|**Architecture Diagram**|[CS5 Architecture Diagram](https://mermaid.ai/d/f7139255-cc68-4b7c-988d-a5ecbfafba1a)|
 
 ---
 
