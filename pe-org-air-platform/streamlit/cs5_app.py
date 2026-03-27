@@ -1365,57 +1365,47 @@ def _render_docx_preview(data: bytes) -> None:
         doc = Document(io.BytesIO(data))
         html_parts = []
 
-        # Build an ordered list of all body elements (paragraphs + tables)
-        body = doc.element.body
-        for child in body:
-            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-            if tag == "p":
-                # Paragraph
-                text = child.text or ""
-                # Also get text from runs
-                for run in child.iter():
-                    if run.text and run != child:
-                        text += run.text
-                text = text.strip()
+        # Iterate body elements in order using python-docx iterators
+        para_idx = 0
+        table_idx = 0
+        paras = doc.paragraphs
+        tables = doc.tables
+
+        for block in doc.element.body:
+            tag = block.tag.split("}")[-1] if "}" in block.tag else block.tag
+
+            if tag == "p" and para_idx < len(paras):
+                p = paras[para_idx]
+                para_idx += 1
+                text = p.text.strip()
                 if not text:
                     continue
-                # Detect heading by style
-                style_el = child.find(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pStyle")
-                style_val = style_el.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val", "").lower() if style_el is not None else ""
-                if "heading" in style_val:
-                    level = "18px" if "1" in style_val else "16px"
-                    html_parts.append(f'<div style="font-size:{level};font-weight:700;margin:14px 0 6px;color:#1a1a1e">{text}</div>')
-                elif "list" in style_val:
-                    html_parts.append(f'<div style="font-size:14px;color:#4b4a45;padding-left:20px;margin-bottom:2px">&#8226; {text}</div>')
+                style = (p.style.name or "").lower() if p.style else ""
+                if "heading 1" in style:
+                    html_parts.append(f'<div style="font-size:18px;font-weight:700;margin:16px 0 8px;color:#1a1a1e">{text}</div>')
+                elif "heading" in style:
+                    html_parts.append(f'<div style="font-size:16px;font-weight:700;margin:12px 0 6px;color:#1a1a1e">{text}</div>')
+                elif "list" in style:
+                    html_parts.append(f'<div style="font-size:14px;color:#4b4a45;padding-left:20px;margin-bottom:3px">&bull; {text}</div>')
                 else:
                     html_parts.append(f'<div style="font-size:14px;color:#4b4a45;line-height:1.7;margin-bottom:4px">{text}</div>')
-            elif tag == "tbl":
-                # Table
-                rows_html = []
-                for tr in child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tr"):
-                    cells = []
-                    for tc in tr.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tc"):
-                        cell_text = ""
-                        for p in tc.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
-                            for r in p.iter():
-                                if r.text:
-                                    cell_text += r.text
-                        cells.append(cell_text.strip())
-                    rows_html.append(cells)
-                if rows_html:
-                    tbl_html = '<table style="width:100%;border-collapse:collapse;font-size:13px;margin:8px 0">'
-                    for i, row in enumerate(rows_html):
-                        tag_name = "th" if i == 0 else "td"
-                        style = "background:#f0f0f0;font-weight:600;" if i == 0 else ""
-                        tbl_html += "<tr>" + "".join(
-                            f'<{tag_name} style="{style}padding:6px 10px;border:1px solid #e0e0e0">{c}</{tag_name}>'
-                            for c in row
-                        ) + "</tr>"
-                    tbl_html += "</table>"
-                    html_parts.append(tbl_html)
+
+            elif tag == "tbl" and table_idx < len(tables):
+                tbl = tables[table_idx]
+                table_idx += 1
+                tbl_html = '<table style="width:100%;border-collapse:collapse;font-size:13px;margin:10px 0">'
+                for i, row in enumerate(tbl.rows):
+                    tag_name = "th" if i == 0 else "td"
+                    bg = "background:#f0f0f0;font-weight:600;" if i == 0 else ""
+                    tbl_html += "<tr>" + "".join(
+                        f'<{tag_name} style="{bg}padding:8px 12px;border:1px solid #e0e0e0">{cell.text.strip()}</{tag_name}>'
+                        for cell in row.cells
+                    ) + "</tr>"
+                tbl_html += "</table>"
+                html_parts.append(tbl_html)
 
         st.markdown(
-            f'''<div class="card" style="max-height:500px;overflow-y:auto;background:#fafaf8;border:1px dashed #e8e7e3;padding:16px">
+            f'''<div style="max-height:600px;overflow-y:auto;background:#fafaf8;border:1px dashed #e8e7e3;border-radius:10px;padding:20px 24px">
               {"".join(html_parts)}
             </div>''',
             unsafe_allow_html=True,
