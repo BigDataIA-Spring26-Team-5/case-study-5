@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PE Org-AI-R — CS5 Dashboard Mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+--font:'DM Sans',system-ui,sans-serif;--mono:'DM Mono','Consolas',monospace;
+--bg-page:#f4f3f0;--bg-card:#fff;--bg-sidebar:#1a1a1e;--bg-surface:#f8f7f5;--bg-input:#2a2a2f;
+--text-1:#1a1a1e;--text-2:#6b6a65;--text-3:#9c9a92;
+--border:rgba(0,0,0,0.08);--border-hover:rgba(0,0,0,0.15);
+--accent:#3d5afe;--accent-light:#e8ebff;
+--green:#0d9f6e;--green-bg:#ecfdf5;--green-dark:#065f46;
+--red:#dc2626;--red-bg:#fef2f2;
+--amber:#d97706;--amber-bg:#fffbeb;--amber-dark:#92400e;
+--teal:#0d9488;--teal-bg:#f0fdfa;
+--purple:#7c3aed;--purple-bg:#f5f3ff;
+--blue:#2563eb;--blue-bg:#eff6ff;
+--radius:10px;--radius-lg:14px;--radius-sm:6px;
+--shadow-sm:0 1px 2px rgba(0,0,0,0.04);--shadow-md:0 2px 8px rgba(0,0,0,0.06);
+--transition:0.2s cubic-bezier(0.4,0,0.2,1);
+}
+body{font-family:var(--font);background:var(--bg-page);color:var(--text-1);line-height:1.5;-webkit-font-smoothing:antialiased}
+.app{display:flex;min-height:100vh}
+.sidebar{width:260px;background:var(--bg-sidebar);color:#e0dfd8;padding:24px 18px;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:10;display:flex;flex-direction:column}
+.sidebar-brand{font-size:13px;font-weight:500;letter-spacing:2px;text-transform:uppercase;color:#9c9a92;margin-bottom:6px}
+.sidebar-title{font-size:20px;font-weight:600;color:#fff;margin-bottom:24px;line-height:1.3}
+.sidebar label{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:#7a7972;display:block;margin-bottom:5px;margin-top:14px}
+.sidebar label:first-of-type{margin-top:0}
+.sidebar input,.sidebar select{width:100%;background:var(--bg-input);border:1px solid rgba(255,255,255,0.06);border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;color:#e0dfd8;font-family:var(--font);outline:none;transition:border var(--transition)}
+.sidebar input:focus,.sidebar select:focus{border-color:rgba(255,255,255,0.2)}
+.sidebar select{cursor:pointer}
+.sidebar select option{background:#2a2a2f}
+.sidebar-status{margin-top:16px;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--green)}
+.sidebar-status::before{content:'';width:7px;height:7px;background:var(--green);border-radius:50%;display:inline-block}
+.sidebar-nav{margin-top:28px}
+.sidebar-nav-label{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#5a5955;margin-bottom:8px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius-sm);font-size:13px;color:#b0afa8;cursor:pointer;transition:all var(--transition);margin-bottom:2px}
+.nav-item:hover{background:rgba(255,255,255,0.05);color:#e0dfd8}
+.nav-item.active{background:rgba(61,90,254,0.15);color:#8fa4ff}
+.nav-item .nav-icon{width:18px;text-align:center;font-size:14px;opacity:.7}
+.sidebar-footer{margin-top:auto;padding-top:20px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#5a5955;line-height:1.6}
+.main{margin-left:260px;flex:1;padding:28px 32px 60px;max-width:1100px}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+.page-title{font-size:24px;font-weight:600}
+.page-subtitle{font-size:13px;color:var(--text-3);margin-top:2px}
+.header-actions{display:flex;gap:8px}
+.btn{padding:8px 16px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font);font-weight:500;cursor:pointer;transition:all var(--transition);border:1px solid var(--border);background:var(--bg-card);color:var(--text-1)}
+.btn:hover{border-color:var(--border-hover);box-shadow:var(--shadow-sm)}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary:hover{opacity:.9}
+.metrics-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}
+.metric-card{background:var(--bg-card);border-radius:var(--radius);padding:16px 18px;border:1px solid var(--border);transition:box-shadow var(--transition)}
+.metric-card:hover{box-shadow:var(--shadow-md)}
+.metric-label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-3);margin-bottom:4px}
+.metric-value{font-size:26px;font-weight:600;line-height:1.2}
+.metric-delta{font-size:12px;margin-top:3px}
+.delta-pos{color:var(--green)}.delta-neg{color:var(--red)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px 22px;margin-bottom:16px}
+.card-title{font-size:15px;font-weight:500;margin-bottom:14px;color:var(--text-1)}
+.section-divider{display:flex;align-items:center;gap:12px;margin:36px 0 20px}
+.section-divider-line{flex:1;height:1px;background:var(--border)}
+.section-divider-label{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-3);white-space:nowrap}
+.table-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-card)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;padding:10px 14px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);font-weight:500;background:var(--bg-surface);border-bottom:1px solid var(--border)}
+tbody td{padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-1)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--bg-surface)}
+.badge{display:inline-flex;align-items:center;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.badge-green{background:var(--green-bg);color:var(--green-dark)}
+.badge-amber{background:var(--amber-bg);color:var(--amber-dark)}
+.badge-red{background:var(--red-bg);color:var(--red)}
+.badge-blue{background:var(--blue-bg);color:var(--blue)}
+.badge-purple{background:var(--purple-bg);color:var(--purple)}
+.badge-teal{background:var(--teal-bg);color:var(--teal)}
+.scatter-area{position:relative;min-height:260px;border-left:1px solid var(--border);border-bottom:1px solid var(--border);margin:10px 0 0}
+.scatter-dot{position:absolute;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;cursor:pointer;transition:transform var(--transition),box-shadow var(--transition);box-shadow:0 2px 6px rgba(0,0,0,.15)}
+.scatter-dot:hover{transform:scale(1.15);box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.scatter-axis{position:absolute;font-size:11px;color:var(--text-3)}
+.scatter-threshold{position:absolute;border:1px dashed rgba(0,0,0,.1)}
+.scatter-threshold-label{position:absolute;font-size:10px;color:var(--text-3);background:var(--bg-card);padding:0 4px}
+.tabs{display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid var(--border);overflow-x:auto}
+.tab{padding:10px 18px;font-size:13px;color:var(--text-3);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all var(--transition);font-weight:400}
+.tab:hover{color:var(--text-1)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:500}
+.evidence-card{border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;background:var(--bg-card);margin-bottom:12px}
+.evidence-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.evidence-dim{font-size:15px;font-weight:500}
+.rubric-box{background:var(--blue-bg);border-left:3px solid var(--blue);padding:8px 12px;border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:12px;color:var(--blue);margin-bottom:12px}
+.evidence-list{list-style:none}
+.evidence-item{padding:8px 0;border-top:1px solid var(--border);font-size:12px;color:var(--text-2);display:flex;justify-content:space-between;align-items:center}
+.evidence-source{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:4px;background:var(--bg-surface);color:var(--text-3);margin-right:8px}
+.evidence-conf{font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.gap-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.gap-tag{font-size:11px;background:var(--amber-bg);color:var(--amber-dark);padding:3px 10px;border-radius:20px;font-weight:500}
+.agent-flow{display:flex;align-items:center;gap:6px;padding:12px 0;overflow-x:auto}
+.agent-node{min-width:100px;padding:10px 12px;border-radius:var(--radius);border:1px solid var(--border);text-align:center;font-size:12px;font-weight:500;background:var(--bg-card);color:var(--text-2);transition:all var(--transition);white-space:nowrap}
+.agent-node.done{border-color:var(--green);background:var(--green-bg);color:var(--green-dark)}
+.agent-node.active{border-color:var(--accent);background:var(--accent-light);color:var(--accent);animation:pulse 2s ease-in-out infinite}
+.agent-node.hitl{border-color:var(--amber);background:var(--amber-bg);color:var(--amber-dark)}
+.agent-node.pending{opacity:.5}
+.agent-arrow{color:var(--text-3);font-size:18px;flex-shrink:0}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(61,90,254,.2)}50%{box-shadow:0 0 0 6px rgba(61,90,254,0)}}
+.hitl-banner{background:var(--amber-bg);border:1px solid rgba(217,119,6,.2);border-radius:var(--radius);padding:12px 16px;display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.hitl-icon{font-size:20px}
+.hitl-text{font-size:13px;color:var(--amber-dark);flex:1}
+.hitl-actions{display:flex;gap:6px}
+.btn-approve{background:var(--green);color:#fff;border-color:var(--green);font-size:12px;padding:6px 14px}
+.btn-reject{background:#fff;color:var(--red);border-color:var(--red);font-size:12px;padding:6px 14px}
+.trend-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.trend-card{background:var(--bg-surface);border-radius:var(--radius);padding:14px 16px}
+.trend-label{font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.4px}
+.trend-value{font-size:20px;font-weight:600;margin-top:2px}
+.sparkline-bar{position:absolute;bottom:0;border-radius:3px 3px 0 0}
+.prom-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.prom-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.prom-name{font-family:var(--mono);font-size:11px;color:var(--text-3);margin-bottom:4px;word-break:break-all}
+.prom-value{font-size:22px;font-weight:600}
+.prom-meta{font-size:11px;color:var(--text-3);margin-top:2px}
+.quartile-bar{display:flex;height:26px;border-radius:var(--radius-sm);overflow:hidden;margin-top:8px}
+.q-seg{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff}
+.mcp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.mcp-card{border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;background:var(--bg-card);transition:box-shadow var(--transition)}
+.mcp-card:hover{box-shadow:var(--shadow-md)}
+.mcp-card-name{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--text-1);margin-bottom:4px}
+.mcp-card-source{font-size:11px;color:var(--text-3);margin-bottom:6px}
+.mcp-card-desc{font-size:12px;color:var(--text-2);line-height:1.5}
+.agent-log{background:#1a1a1e;border-radius:var(--radius);padding:16px;font-family:var(--mono);font-size:12px;line-height:1.8;color:#c5c4be;max-height:300px;overflow-y:auto}
+.log-time{color:#6b6a65}.log-agent{color:#8fa4ff}.log-tool{color:#5dcaa5}.log-warn{color:#f59e0b}.log-ok{color:#0d9f6e}
+@media(max-width:900px){.metrics-row{grid-template-columns:repeat(2,1fr)}.prom-grid{grid-template-columns:repeat(2,1fr)}.mcp-grid{grid-template-columns:1fr}}
+.mb-4{margin-bottom:4px}.mb-8{margin-bottom:8px}.mb-12{margin-bottom:12px}.mb-16{margin-bottom:16px}.mb-20{margin-bottom:20px}
+.text-mono{font-family:var(--mono)}.text-sm{font-size:12px}.text-xs{font-size:11px}.text-muted{color:var(--text-3)}
+.flex{display:flex}.items-center{align-items:center}.gap-8{gap:8px}.gap-12{gap:12px}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+<div class="sidebar-brand">Org-AI-R</div>
+<div class="sidebar-title">PE Portfolio Intelligence</div>
+<label>Fund ID</label>
+<input type="text" value="growth_fund_v"/>
+<label>Company (deep dive)</label>
+<select>
+<option selected>NVDA — NVIDIA</option>
+<option>MSFT — Microsoft</option>
+<option>AMZN — Amazon</option>
+<option>JPM — JPMorgan</option>
+<option>UNH — UnitedHealth</option>
+</select>
+<label>Assessment type</label>
+<select>
+<option selected>Full</option>
+<option>Limited</option>
+<option>Screening</option>
+</select>
+<div class="sidebar-status">CS1-CS4 services connected</div>
+<nav class="sidebar-nav">
+<div class="sidebar-nav-label">Pages</div>
+<div class="nav-item active" onclick="showPage('overview',this)"><span class="nav-icon">&#9673;</span> Portfolio overview</div>
+<div class="nav-item" onclick="showPage('evidence',this)"><span class="nav-icon">&#9678;</span> Evidence analysis</div>
+<div class="nav-item" onclick="showPage('history',this)"><span class="nav-icon">&#9672;</span> Assessment history</div>
+<div class="nav-item" onclick="showPage('agents',this)"><span class="nav-icon">&#9671;</span> Agentic workflow</div>
+<div class="nav-item" onclick="showPage('fundair',this)"><span class="nav-icon">&#9670;</span> Fund-AI-R analytics</div>
+<div class="nav-item" onclick="showPage('mcp',this)"><span class="nav-icon">&#9676;</span> MCP tools &amp; resources</div>
+<div class="nav-item" onclick="showPage('metrics',this)"><span class="nav-icon">&#9677;</span> Prometheus metrics</div>
+</nav>
+<div class="sidebar-footer">CS5 Capstone — Spring 2026<br>MCP + LangGraph + No Mock Data<br>All data via CS1-CS4 APIs</div>
+</aside>
+
+<div class="main">
+
+<!-- ═══ PAGE 1: PORTFOLIO OVERVIEW (Task 9.6) ═══ -->
+<div id="page-overview" class="page-section">
+<div class="page-header">
+<div><div class="page-title">Portfolio overview</div><div class="page-subtitle">Fund: growth_fund_v — All data from CS1-CS4 via PortfolioDataService</div></div>
+<div class="header-actions"><button class="btn">Export CSV</button><button class="btn btn-primary">Run full assessment</button></div>
+</div>
+<div class="metrics-row">
+<div class="metric-card"><div class="metric-label">Fund-AI-R</div><div class="metric-value">68.4</div><div class="metric-delta delta-pos">+3.2 vs entry (EV-weighted)</div></div>
+<div class="metric-card"><div class="metric-label">Companies</div><div class="metric-value">5</div><div class="metric-delta text-muted">cs1.get_portfolio_companies()</div></div>
+<div class="metric-card"><div class="metric-label">Avg V<sup>R</sup></div><div class="metric-value">71.2</div><div class="metric-delta delta-pos">Idiosyncratic readiness</div></div>
+<div class="metric-card"><div class="metric-label">Avg delta since entry</div><div class="metric-value" style="color:var(--green)">+4.8</div><div class="metric-delta delta-pos">All portfolios improving</div></div>
+</div>
+<div class="card">
+<div class="card-title">Portfolio AI-readiness map — V<sup>R</sup> vs H<sup>R</sup> (from CS3)</div>
+<div class="scatter-area">
+<div class="scatter-threshold" style="left:0;right:0;top:50%"></div>
+<div class="scatter-threshold" style="top:0;bottom:0;left:50%"></div>
+<div class="scatter-threshold-label" style="left:52%;top:2px">V<sup>R</sup> threshold = 60</div>
+<div class="scatter-threshold-label" style="left:2px;top:48%">H<sup>R</sup> threshold = 60</div>
+<div class="scatter-axis" style="bottom:4px;right:8px">V<sup>R</sup> (idiosyncratic) →</div>
+<div class="scatter-axis" style="top:4px;left:8px">↑ H<sup>R</sup> (systematic)</div>
+<div class="scatter-dot" style="left:74%;top:18%;width:42px;height:42px;background:var(--green)" title="NVDA Org-AI-R: 82.1">NV</div>
+<div class="scatter-dot" style="left:64%;top:26%;width:36px;height:36px;background:var(--blue)" title="MSFT Org-AI-R: 75.4">MS</div>
+<div class="scatter-dot" style="left:58%;top:34%;width:34px;height:34px;background:var(--blue)" title="AMZN Org-AI-R: 70.2">AZ</div>
+<div class="scatter-dot" style="left:38%;top:50%;width:28px;height:28px;background:var(--amber)" title="JPM Org-AI-R: 58.3">JP</div>
+<div class="scatter-dot" style="left:30%;top:58%;width:26px;height:26px;background:var(--red)" title="UNH Org-AI-R: 52.0">UH</div>
+</div>
+</div>
+<div class="card-title mb-8">Portfolio companies (from CS1 + CS3)</div>
+<div class="table-wrap mb-16">
+<table>
+<thead><tr><th>Ticker</th><th>Name</th><th>Sector</th><th>Org-AI-R</th><th>V<sup>R</sup></th><th>H<sup>R</sup></th><th>Synergy</th><th>Delta</th><th>Evidence</th><th>CI (95%)</th></tr></thead>
+<tbody>
+<tr><td class="text-mono">NVDA</td><td>NVIDIA Corp</td><td><span class="badge badge-purple">Technology</span></td><td><span class="badge badge-green">82.1</span></td><td>85.3</td><td>78.9</td><td>6.2</td><td class="delta-pos">+8.1</td><td>47</td><td class="text-muted text-xs">±4.2</td></tr>
+<tr><td class="text-mono">MSFT</td><td>Microsoft Corp</td><td><span class="badge badge-purple">Technology</span></td><td><span class="badge badge-green">75.4</span></td><td>78.1</td><td>72.7</td><td>5.1</td><td class="delta-pos">+5.4</td><td>39</td><td class="text-muted text-xs">±3.8</td></tr>
+<tr><td class="text-mono">AMZN</td><td>Amazon.com</td><td><span class="badge badge-purple">Technology</span></td><td><span class="badge badge-green">70.2</span></td><td>73.5</td><td>66.8</td><td>4.8</td><td class="delta-pos">+4.2</td><td>35</td><td class="text-muted text-xs">±4.0</td></tr>
+<tr><td class="text-mono">JPM</td><td>JPMorgan Chase</td><td><span class="badge badge-blue">Financial</span></td><td><span class="badge badge-amber">58.3</span></td><td>55.9</td><td>60.7</td><td>3.2</td><td class="delta-pos">+3.3</td><td>28</td><td class="text-muted text-xs">±5.1</td></tr>
+<tr><td class="text-mono">UNH</td><td>UnitedHealth</td><td><span class="badge badge-teal">Healthcare</span></td><td><span class="badge badge-red">52.0</span></td><td>48.2</td><td>55.8</td><td>2.8</td><td class="delta-pos">+2.0</td><td>22</td><td class="text-muted text-xs">±5.6</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<!-- ═══ PAGE 2: EVIDENCE ANALYSIS (Task 9.5) ═══ -->
+<div id="page-evidence" class="page-section" style="display:none">
+<div class="page-header">
+<div><div class="page-title">Evidence analysis: NVDA</div><div class="page-subtitle">render_company_evidence_panel() — CS4 RAG justifications across 7 dimensions</div></div>
+</div>
+<div class="metrics-row">
+<div class="metric-card"><div class="metric-label">Total evidence</div><div class="metric-value">47</div></div>
+<div class="metric-card"><div class="metric-label">Avg level</div><div class="metric-value">L4.1</div></div>
+<div class="metric-card"><div class="metric-label">Strong evidence</div><div class="metric-value">5 / 7</div></div>
+<div class="metric-card"><div class="metric-label">Gaps found</div><div class="metric-value">6</div></div>
+</div>
+<div class="card-title mb-8">Dimension summary (render_evidence_summary_table)</div>
+<div class="table-wrap mb-16">
+<table>
+<thead><tr><th>Dimension</th><th>Score</th><th>Level</th><th>Evidence</th><th>Items</th><th>Gaps</th></tr></thead>
+<tbody>
+<tr><td>Data infrastructure</td><td>78.5</td><td><span class="badge badge-green">L4</span></td><td><span class="badge badge-green">Strong</span></td><td>8</td><td>2</td></tr>
+<tr><td>AI governance</td><td>72.0</td><td><span class="badge badge-green">L4</span></td><td><span class="badge badge-green">Strong</span></td><td>7</td><td>1</td></tr>
+<tr><td>Technology stack</td><td>88.2</td><td><span class="badge badge-teal">L5</span></td><td><span class="badge badge-green">Strong</span></td><td>9</td><td>0</td></tr>
+<tr><td>Talent</td><td>80.1</td><td><span class="badge badge-green">L4</span></td><td><span class="badge badge-green">Strong</span></td><td>7</td><td>1</td></tr>
+<tr><td>Leadership</td><td>85.0</td><td><span class="badge badge-teal">L5</span></td><td><span class="badge badge-green">Strong</span></td><td>6</td><td>0</td></tr>
+<tr><td>Use case portfolio</td><td>76.3</td><td><span class="badge badge-green">L4</span></td><td><span class="badge badge-amber">Moderate</span></td><td>6</td><td>1</td></tr>
+<tr><td>Culture</td><td>62.8</td><td><span class="badge badge-amber">L3</span></td><td><span class="badge badge-amber">Moderate</span></td><td>4</td><td>1</td></tr>
+</tbody>
+</table>
+</div>
+<div class="tabs">
+<div class="tab active">Data infra</div><div class="tab">AI governance</div><div class="tab">Tech stack</div><div class="tab">Talent</div><div class="tab">Leadership</div><div class="tab">Use cases</div><div class="tab">Culture</div>
+</div>
+<div class="evidence-card">
+<div class="evidence-header">
+<div class="flex items-center gap-8"><span class="evidence-dim">Data infrastructure</span><span class="badge badge-green">L4 — Good</span><span style="font-size:16px;font-weight:600">78.5</span></div>
+<span class="badge badge-green">Strong evidence</span>
+</div>
+<div class="rubric-box"><strong>Rubric match:</strong> Enterprise-grade data platform with real-time processing, governance controls, and automated quality monitoring</div>
+<div style="font-size:12px;font-weight:500;color:var(--text-2);margin-bottom:6px">Supporting evidence (from CS4 RAG — justification.supporting_evidence[:5])</div>
+<ul class="evidence-list">
+<li class="evidence-item"><span><span class="evidence-source">SEC 10-K</span> Significant investment in proprietary data center infrastructure and DGX systems</span><span class="evidence-conf">92%</span></li>
+<li class="evidence-item"><span><span class="evidence-source">Job posting</span> Senior Data Platform Engineer — CUDA-accelerated data pipelines, Spark, Kafka</span><span class="evidence-conf">88%</span></li>
+<li class="evidence-item"><span><span class="evidence-source">Patent</span> US-2024-0142892: Distributed training data management and caching system</span><span class="evidence-conf">85%</span></li>
+<li class="evidence-item"><span><span class="evidence-source">Press</span> NVIDIA DGX Cloud partnership with AWS, Azure, and GCP for managed infra</span><span class="evidence-conf">80%</span></li>
+<li class="evidence-item"><span><span class="evidence-source">SEC 10-Q</span> Q3 2025 CapEx includes $2.1B allocated to data infrastructure expansion</span><span class="evidence-conf">78%</span></li>
+</ul>
+<div class="gap-list"><span style="font-size:12px;font-weight:500;color:var(--amber-dark)">Gaps identified:</span><span class="gap-tag">Data lineage tooling</span><span class="gap-tag">Cross-region latency SLAs</span></div>
+</div>
+</div>
+
+<!-- ═══ PAGE 3: ASSESSMENT HISTORY (Task 9.4) ═══ -->
+<div id="page-history" class="page-section" style="display:none">
+<div class="page-header">
+<div><div class="page-title">Assessment history: NVDA</div><div class="page-subtitle">AssessmentHistoryService — trends from CS3 snapshots stored via CS1/Snowflake</div></div>
+<div class="header-actions"><button class="btn btn-primary">Record new snapshot</button></div>
+</div>
+<div class="trend-row">
+<div class="trend-card"><div class="trend-label">Current Org-AI-R</div><div class="trend-value">82.1</div></div>
+<div class="trend-card"><div class="trend-label">Entry Org-AI-R</div><div class="trend-value">74.0</div></div>
+<div class="trend-card"><div class="trend-label">Delta since entry</div><div class="trend-value delta-pos">+8.1</div></div>
+</div>
+<div class="trend-row">
+<div class="trend-card"><div class="trend-label">30-day delta</div><div class="trend-value delta-pos">+2.3</div></div>
+<div class="trend-card"><div class="trend-label">90-day delta</div><div class="trend-value delta-pos">+5.6</div></div>
+<div class="trend-card"><div class="trend-label">Trend direction</div><div class="trend-value" style="color:var(--green)">↑ Improving</div></div>
+</div>
+<div class="card">
+<div class="card-title">Org-AI-R score over time (12 months — use plotly line chart)</div>
+<div style="height:120px;position:relative">
+<div class="sparkline-bar" style="left:0%;height:62%;background:var(--blue);opacity:.3;width:9%"></div>
+<div class="sparkline-bar" style="left:10%;height:65%;background:var(--blue);opacity:.35;width:9%"></div>
+<div class="sparkline-bar" style="left:20%;height:68%;background:var(--blue);opacity:.4;width:9%"></div>
+<div class="sparkline-bar" style="left:30%;height:70%;background:var(--blue);opacity:.45;width:9%"></div>
+<div class="sparkline-bar" style="left:40%;height:73%;background:var(--blue);opacity:.5;width:9%"></div>
+<div class="sparkline-bar" style="left:50%;height:72%;background:var(--blue);opacity:.55;width:9%"></div>
+<div class="sparkline-bar" style="left:60%;height:76%;background:var(--blue);opacity:.6;width:9%"></div>
+<div class="sparkline-bar" style="left:70%;height:78%;background:var(--blue);opacity:.7;width:9%"></div>
+<div class="sparkline-bar" style="left:80%;height:80%;background:var(--blue);opacity:.8;width:9%"></div>
+<div class="sparkline-bar" style="left:90%;height:85%;background:var(--green);opacity:.9;width:9%"></div>
+</div>
+<div class="flex" style="justify-content:space-between;font-size:10px;color:var(--text-3);margin-top:4px"><span>Apr 2025</span><span>Jul 2025</span><span>Oct 2025</span><span>Jan 2026</span><span>Mar 2026</span></div>
+</div>
+<div class="card-title mb-8">Assessment snapshots (AssessmentSnapshot records)</div>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Timestamp</th><th>Org-AI-R</th><th>V<sup>R</sup></th><th>H<sup>R</sup></th><th>Synergy</th><th>Evidence</th><th>Type</th><th>Assessor</th></tr></thead>
+<tbody>
+<tr><td class="text-xs">2026-03-25 14:30</td><td><span class="badge badge-green">82.1</span></td><td>85.3</td><td>78.9</td><td>6.2</td><td>47</td><td><span class="badge badge-blue">Full</span></td><td>analyst_01</td></tr>
+<tr><td class="text-xs">2026-02-20 10:15</td><td><span class="badge badge-green">79.8</span></td><td>83.0</td><td>76.5</td><td>5.8</td><td>42</td><td><span class="badge badge-blue">Full</span></td><td>analyst_01</td></tr>
+<tr><td class="text-xs">2026-01-15 09:00</td><td><span class="badge badge-green">76.5</span></td><td>80.2</td><td>73.1</td><td>5.5</td><td>38</td><td><span class="badge badge-purple">Limited</span></td><td>analyst_02</td></tr>
+<tr><td class="text-xs">2025-10-10 16:45</td><td><span class="badge badge-green">74.0</span></td><td>77.8</td><td>70.2</td><td>5.0</td><td>31</td><td><span class="badge badge-blue">Full</span></td><td>analyst_01</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<!-- ═══ PAGE 4: AGENTIC WORKFLOW (Tasks 10.1-10.4) ═══ -->
+<div id="page-agents" class="page-section" style="display:none">
+<div class="page-header">
+<div><div class="page-title">Agentic due diligence: NVDA</div><div class="page-subtitle">LangGraph supervisor → specialist agents → MCP tools → CS1-CS4</div></div>
+<div class="header-actions"><button class="btn btn-primary">Run due diligence</button></div>
+</div>
+<div class="hitl-banner">
+<span class="hitl-icon">⚠</span>
+<span class="hitl-text"><strong>HITL approval required:</strong> Org-AI-R score 82.1 — outside normal range [40, 85]. Supervisor routed to hitl_approval node.</span>
+<div class="hitl-actions"><button class="btn btn-approve">Approve</button><button class="btn btn-reject">Reject</button></div>
+</div>
+<div class="card">
+<div class="card-title">Workflow progress — create_due_diligence_graph()</div>
+<div class="agent-flow">
+<div class="agent-node done">Supervisor<br><span class="text-xs">Route</span></div><span class="agent-arrow">→</span>
+<div class="agent-node done">SEC analyst<br><span class="text-xs">CS2 evidence</span></div><span class="agent-arrow">→</span>
+<div class="agent-node done">Supervisor<br><span class="text-xs">Route</span></div><span class="agent-arrow">→</span>
+<div class="agent-node done">Scorer<br><span class="text-xs">CS3 scores</span></div><span class="agent-arrow">→</span>
+<div class="agent-node hitl">HITL gate<br><span class="text-xs">Pending</span></div><span class="agent-arrow">→</span>
+<div class="agent-node pending">Evidence agent<br><span class="text-xs">CS4 RAG</span></div><span class="agent-arrow">→</span>
+<div class="agent-node pending">Value creator<br><span class="text-xs">Gap+EBITDA</span></div><span class="agent-arrow">→</span>
+<div class="agent-node pending">Complete</div>
+</div>
+</div>
+<div class="card">
+<div class="card-title">DueDiligenceState (agents/state.py)</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div><div class="text-xs text-muted mb-4">Input fields</div><div class="table-wrap"><table><tbody>
+<tr><td class="text-mono text-xs">company_id</td><td>"NVDA"</td></tr>
+<tr><td class="text-mono text-xs">assessment_type</td><td>"full"</td></tr>
+<tr><td class="text-mono text-xs">requested_by</td><td>"analyst"</td></tr>
+<tr><td class="text-mono text-xs">started_at</td><td>2026-03-26T14:30:00Z</td></tr>
+</tbody></table></div></div>
+<div><div class="text-xs text-muted mb-4">Workflow control</div><div class="table-wrap"><table><tbody>
+<tr><td class="text-mono text-xs">next_agent</td><td>"hitl_approval"</td></tr>
+<tr><td class="text-mono text-xs">requires_approval</td><td><span class="badge badge-amber">true</span></td></tr>
+<tr><td class="text-mono text-xs">approval_status</td><td><span class="badge badge-amber">pending</span></td></tr>
+<tr><td class="text-mono text-xs">total_tokens</td><td>4,231</td></tr>
+</tbody></table></div></div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+<div class="card"><div class="card-title">SEC analyst (SECAnalysisAgent)</div><div class="text-sm" style="color:var(--text-2)"><div class="mb-4"><span class="evidence-source">Status</span> <span class="badge badge-green">Complete</span></div><div class="mb-4">Dimensions: data_infrastructure, ai_governance, technology_stack</div><div class="mb-4">MCP: get_company_evidence("NVDA", "all")</div><div>47 evidence items from CS2</div></div></div>
+<div class="card"><div class="card-title">Scorer (ScoringAgent)</div><div class="text-sm" style="color:var(--text-2)"><div class="mb-4"><span class="evidence-source">Status</span> <span class="badge badge-green">Complete</span></div><div class="mb-4">Org-AI-R: <strong>82.1</strong> | V<sup>R</sup>: 85.3 | H<sup>R</sup>: 78.9</div><div class="mb-4">MCP: calculate_org_air_score("NVDA")</div><div>CI: [77.9, 86.3] — <span class="badge badge-amber">Triggers HITL</span></div></div></div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+<div class="card"><div class="card-title">Evidence agent — pending</div><div class="text-sm text-muted"><div class="mb-4"><span class="evidence-source">Status</span> <span class="badge" style="background:#eee;color:#999">Waiting</span></div><div>Will call: generate_justification() for 3 dimensions via CS4</div></div></div>
+<div class="card"><div class="card-title">Value creator — pending</div><div class="text-sm text-muted"><div class="mb-4"><span class="evidence-source">Status</span> <span class="badge" style="background:#eee;color:#999">Waiting</span></div><div>Will call: run_gap_analysis("NVDA", target=80.0)</div></div></div>
+</div>
+<div class="card">
+<div class="card-title">Agent execution log (structlog)</div>
+<div class="agent-log">
+<span class="log-time">14:30:01</span> <span class="log-agent">[supervisor]</span> Starting due diligence for NVDA (full)
+<span class="log-time">14:30:01</span> <span class="log-agent">[supervisor]</span> sec_analysis is None → routing to sec_analyst
+<span class="log-time">14:30:02</span> <span class="log-agent">[sec_analyst]</span> <span class="log-tool">MCP call:</span> get_company_evidence(company_id="NVDA", dimension="all")
+<span class="log-time">14:30:04</span> <span class="log-agent">[sec_analyst]</span> <span class="log-ok">Complete</span> — 47 evidence items from CS2
+<span class="log-time">14:30:04</span> <span class="log-agent">[supervisor]</span> scoring_result is None → routing to scorer
+<span class="log-time">14:30:05</span> <span class="log-agent">[scorer]</span> <span class="log-tool">MCP call:</span> calculate_org_air_score(company_id="NVDA")
+<span class="log-time">14:30:06</span> <span class="log-agent">[scorer]</span> <span class="log-ok">Scoring complete:</span> Org-AI-R=82.1 V^R=85.3 H^R=78.9
+<span class="log-time">14:30:06</span> <span class="log-agent">[scorer]</span> <span class="log-warn">HITL CHECK:</span> 82.1 > 85? No. 82.1 < 40? No. But requires_approval=True
+<span class="log-time">14:30:06</span> <span class="log-agent">[supervisor]</span> requires_approval=True → routing to hitl_approval
+<span class="log-time">14:30:06</span> <span class="log-agent">[hitl]</span> <span class="log-warn">Awaiting human approval...</span>
+</div>
+</div>
+</div>
+
+<!-- ═══ PAGE 5: FUND-AI-R ANALYTICS (Task 10.5) ═══ -->
+<div id="page-fundair" class="page-section" style="display:none">
+<div class="page-header">
+<div><div class="page-title">Fund-AI-R analytics</div><div class="page-subtitle">FundAIRCalculator — EV-weighted portfolio aggregation with sector benchmarks</div></div>
+</div>
+<div class="metrics-row">
+<div class="metric-card"><div class="metric-label">Fund-AI-R (EV-weighted)</div><div class="metric-value">68.4</div><div class="metric-delta text-muted">fund_metrics.fund_air</div></div>
+<div class="metric-card"><div class="metric-label">Total EV ($mm)</div><div class="metric-value">3,420</div><div class="metric-delta text-muted">fund_metrics.total_ev_mm</div></div>
+<div class="metric-card"><div class="metric-label">AI leaders (≥70)</div><div class="metric-value" style="color:var(--green)">3</div><div class="metric-delta text-muted">ai_leaders_count</div></div>
+<div class="metric-card"><div class="metric-label">AI laggards (&lt;50)</div><div class="metric-value" style="color:var(--red)">0</div><div class="metric-delta text-muted">ai_laggards_count</div></div>
+</div>
+<div class="card">
+<div class="card-title">Sector-relative quartile distribution (SECTOR_BENCHMARKS)</div>
+<div class="quartile-bar" style="margin-bottom:12px">
+<div class="q-seg" style="width:40%;background:var(--green)">Q1 (2)</div>
+<div class="q-seg" style="width:20%;background:var(--blue)">Q2 (1)</div>
+<div class="q-seg" style="width:40%;background:var(--amber)">Q3 (2)</div>
+</div>
+<div class="text-sm text-muted">Quartiles from _get_quartile(): Tech Q1≥75, Healthcare Q1≥70, Financial Q1≥72</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div class="card">
+<div class="card-title">Sector concentration (HHI)</div>
+<div class="table-wrap mb-8"><table><thead><tr><th>Sector</th><th>Companies</th><th>EV share</th></tr></thead><tbody>
+<tr><td>Technology</td><td>3</td><td>68%</td></tr>
+<tr><td>Financial services</td><td>1</td><td>18%</td></tr>
+<tr><td>Healthcare</td><td>1</td><td>14%</td></tr>
+</tbody></table></div>
+<div class="text-sm text-muted">sector_hhi = <strong>0.5204</strong> — Concentrated (>0.25)<br>Formula: Σ(ev_share)² per sector</div>
+</div>
+<div class="card">
+<div class="card-title">Company-level breakdown</div>
+<div class="table-wrap"><table><thead><tr><th>Ticker</th><th>Org-AI-R</th><th>EV ($mm)</th><th>Weight</th><th>Quartile</th></tr></thead><tbody>
+<tr><td class="text-mono">NVDA</td><td>82.1</td><td>1,200</td><td>35.1%</td><td><span class="badge badge-green">Q1</span></td></tr>
+<tr><td class="text-mono">MSFT</td><td>75.4</td><td>900</td><td>26.3%</td><td><span class="badge badge-green">Q1</span></td></tr>
+<tr><td class="text-mono">AMZN</td><td>70.2</td><td>620</td><td>18.1%</td><td><span class="badge badge-blue">Q2</span></td></tr>
+<tr><td class="text-mono">JPM</td><td>58.3</td><td>420</td><td>12.3%</td><td><span class="badge badge-amber">Q3</span></td></tr>
+<tr><td class="text-mono">UNH</td><td>52.0</td><td>280</td><td>8.2%</td><td><span class="badge badge-amber">Q3</span></td></tr>
+</tbody></table></div>
+</div>
+</div>
+</div>
+
+<!-- ═══ PAGE 6: MCP TOOLS & RESOURCES (Tasks 9.2, 9.3) ═══ -->
+<div id="page-mcp" class="page-section" style="display:none">
+<div class="page-header">
+<div><div class="page-title">MCP server: tools, resources &amp; prompts</div><div class="page-subtitle">pe-orgair-server — 6 tools, 2 resources, 2 prompts (mcp/server.py)</div></div>
+</div>
+<div class="section-divider"><span class="section-divider-label">MCP tools — @mcp_server.list_tools()</span><div class="section-divider-line"></div></div>
+<div class="mcp-grid mb-20">
+<div class="mcp-card"><div class="mcp-card-name">calculate_org_air_score</div><div class="mcp-card-source"><span class="badge badge-purple">CS3</span> cs3_client.get_assessment()</div><div class="mcp-card-desc">Calculate Org-AI-R score. Returns: org_air, vr_score, hr_score, synergy_score, confidence_interval, dimension_scores. Input: company_id (required).</div></div>
+<div class="mcp-card"><div class="mcp-card-name">get_company_evidence</div><div class="mcp-card-source"><span class="badge badge-teal">CS2</span> cs2_client.get_evidence()</div><div class="mcp-card-desc">Retrieve AI-readiness evidence. Filters by dimension (7 values + "all"). Returns: source_type, content[:500], confidence. Inputs: company_id, dimension, limit.</div></div>
+<div class="mcp-card"><div class="mcp-card-name">generate_justification</div><div class="mcp-card-source"><span class="badge badge-blue">CS4</span> cs4_client.generate_justification()</div><div class="mcp-card-desc">Generate evidence-backed justification via RAG. Returns: score, level, level_name, evidence_strength, rubric_criteria, supporting_evidence[:5], gaps_identified.</div></div>
+<div class="mcp-card"><div class="mcp-card-name">project_ebitda_impact</div><div class="mcp-card-source"><span class="badge badge-purple">CS3</span> ebitda_calculator.project()</div><div class="mcp-card-desc">Project EBITDA impact using v2.0 model. Returns: delta_air, conservative/base/optimistic scenarios, risk_adjusted, requires_approval flag.</div></div>
+<div class="mcp-card"><div class="mcp-card-name">run_gap_analysis</div><div class="mcp-card-source"><span class="badge badge-purple">CS3</span>+<span class="badge badge-blue">CS4</span> gap_analyzer.analyze()</div><div class="mcp-card-desc">Analyze gaps and generate 100-day plan. Calls cs3_client.get_assessment() then gap_analyzer. Returns: gap by dimension, priorities, initiatives, investment.</div></div>
+<div class="mcp-card"><div class="mcp-card-name">get_portfolio_summary</div><div class="mcp-card-source"><span class="badge badge-green">CS1</span> portfolio_data_service.get_portfolio_view()</div><div class="mcp-card-desc">Get fund portfolio summary. Returns: fund_id, fund_air (avg), company_count, companies [{ticker, org_air, sector}].</div></div>
+</div>
+<div class="section-divider"><span class="section-divider-label">MCP resources — @mcp_server.list_resources()</span><div class="section-divider-line"></div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" class="mb-20">
+<div class="card"><div class="card-title" style="font-family:var(--mono);font-size:13px">orgair://parameters/v2.0</div><div class="text-sm text-muted mb-8">Org-AI-R Scoring Parameters v2.0</div><div class="table-wrap"><table><tbody>
+<tr><td class="text-mono text-xs">version</td><td>"2.0"</td></tr>
+<tr><td class="text-mono text-xs">alpha</td><td>0.60</td></tr>
+<tr><td class="text-mono text-xs">beta</td><td>0.12</td></tr>
+<tr><td class="text-mono text-xs">gamma_0</td><td>0.0025</td></tr>
+<tr><td class="text-mono text-xs">gamma_1</td><td>0.05</td></tr>
+<tr><td class="text-mono text-xs">gamma_2</td><td>0.025</td></tr>
+<tr><td class="text-mono text-xs">gamma_3</td><td>0.01</td></tr>
+</tbody></table></div></div>
+<div class="card"><div class="card-title" style="font-family:var(--mono);font-size:13px">orgair://sectors</div><div class="text-sm text-muted mb-8">Sector Definitions &amp; Baselines</div><div class="table-wrap"><table><thead><tr><th>Sector</th><th>H<sup>R</sup> base</th><th>Weight</th></tr></thead><tbody>
+<tr><td>Technology</td><td>85</td><td>weight_talent: 0.18</td></tr>
+<tr><td>Healthcare</td><td>75</td><td>weight_governance: 0.18</td></tr>
+</tbody></table></div></div>
+</div>
+<div class="section-divider"><span class="section-divider-label">MCP prompts — @mcp_server.list_prompts()</span><div class="section-divider-line"></div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div class="card"><div class="card-title">due_diligence_assessment</div><div class="text-sm text-muted mb-8">Complete due diligence for a company</div><div style="background:var(--bg-surface);padding:10px 12px;border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono);color:var(--text-2);line-height:1.7">Args: company_id (required)<br><br>1. calculate_org_air_score<br>2. For dims &lt; 60 → generate_justification<br>3. run_gap_analysis target=75<br>4. project_ebitda_impact</div></div>
+<div class="card"><div class="card-title">ic_meeting_prep</div><div class="text-sm text-muted mb-8">Prepare IC meeting package</div><div style="background:var(--bg-surface);padding:10px 12px;border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono);color:var(--text-2);line-height:1.7">Args: company_id (required)<br><br>"Claude, prepare the IC meeting for NVIDIA."<br>Full package: scores, evidence, gaps, EBITDA.</div></div>
+</div>
+</div>
+
+<!-- ═══ PAGE 7: PROMETHEUS METRICS (Task 10.6) ═══ -->
+<div id="page-metrics" class="page-section" style="display:none">
+<div class="page-header">
+<div><div class="page-title">Prometheus metrics</div><div class="page-subtitle">services/observability/metrics.py — Counters, Histograms, Gauges</div></div>
+</div>
+<div class="section-divider"><span class="section-divider-label">MCP server metrics (MCP_TOOL_CALLS, MCP_TOOL_DURATION)</span><div class="section-divider-line"></div></div>
+<div class="prom-grid">
+<div class="prom-card"><div class="prom-name">mcp_tool_calls_total{status="success"}</div><div class="prom-value">1,247</div><div class="prom-meta">Counter — last 24h</div></div>
+<div class="prom-card"><div class="prom-name">mcp_tool_calls_total{status="error"}</div><div class="prom-value" style="color:var(--red)">12</div><div class="prom-meta">Error rate: 0.95%</div></div>
+<div class="prom-card"><div class="prom-name">mcp_tool_duration_seconds{p50}</div><div class="prom-value">0.84s</div><div class="prom-meta">Histogram buckets: [0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]</div></div>
+</div>
+<div class="table-wrap mb-16"><table>
+<thead><tr><th>tool_name</th><th>Success</th><th>Errors</th><th>p50 (s)</th><th>p99 (s)</th></tr></thead>
+<tbody>
+<tr><td class="text-mono text-xs">calculate_org_air_score</td><td>312</td><td>2</td><td>1.2</td><td>3.8</td></tr>
+<tr><td class="text-mono text-xs">get_company_evidence</td><td>289</td><td>4</td><td>0.8</td><td>2.5</td></tr>
+<tr><td class="text-mono text-xs">generate_justification</td><td>245</td><td>3</td><td>1.5</td><td>4.2</td></tr>
+<tr><td class="text-mono text-xs">project_ebitda_impact</td><td>178</td><td>1</td><td>0.3</td><td>0.9</td></tr>
+<tr><td class="text-mono text-xs">run_gap_analysis</td><td>134</td><td>2</td><td>1.8</td><td>5.1</td></tr>
+<tr><td class="text-mono text-xs">get_portfolio_summary</td><td>89</td><td>0</td><td>0.6</td><td>1.8</td></tr>
+</tbody>
+</table></div>
+<div class="section-divider"><span class="section-divider-label">LangGraph agent metrics (AGENT_INVOCATIONS, AGENT_DURATION)</span><div class="section-divider-line"></div></div>
+<div class="prom-grid">
+<div class="prom-card"><div class="prom-name">agent_invocations_total</div><div class="prom-value">523</div><div class="prom-meta">All agents combined</div></div>
+<div class="prom-card"><div class="prom-name">agent_duration_seconds{p50}</div><div class="prom-value">2.4s</div><div class="prom-meta">Buckets: [0.5, 1.0, 2.5, 5.0, 10.0, 30.0]</div></div>
+<div class="prom-card"><div class="prom-name">hitl_approvals_total</div><div class="prom-value" style="color:var(--amber)">18</div><div class="prom-meta">14 approved / 4 rejected</div></div>
+</div>
+<div class="table-wrap mb-16"><table>
+<thead><tr><th>agent_name</th><th>Invocations</th><th>Errors</th><th>Avg duration</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>sec_analyst</td><td>142</td><td>3</td><td>2.8s</td><td><span class="badge badge-green">Healthy</span></td></tr>
+<tr><td>scorer</td><td>138</td><td>1</td><td>1.9s</td><td><span class="badge badge-green">Healthy</span></td></tr>
+<tr><td>evidence_agent</td><td>130</td><td>5</td><td>3.2s</td><td><span class="badge badge-amber">Degraded</span></td></tr>
+<tr><td>value_creator</td><td>113</td><td>2</td><td>2.1s</td><td><span class="badge badge-green">Healthy</span></td></tr>
+</tbody>
+</table></div>
+<div class="section-divider"><span class="section-divider-label">CS1-CS4 integration (CS_CLIENT_CALLS)</span><div class="section-divider-line"></div></div>
+<div class="prom-grid">
+<div class="prom-card"><div class="prom-name">cs_client_calls_total{service="cs1"}</div><div class="prom-value">89</div><div class="prom-meta">Portfolio data — @track_cs_client</div></div>
+<div class="prom-card"><div class="prom-name">cs_client_calls_total{service="cs2"}</div><div class="prom-value">289</div><div class="prom-meta">Evidence collection</div></div>
+<div class="prom-card"><div class="prom-name">cs_client_calls_total{service="cs3"}</div><div class="prom-value">490</div><div class="prom-meta">Scoring engine</div></div>
+</div>
+<div class="card"><div class="card-title">Decorator usage (metrics.py)</div>
+<div style="background:#1a1a1e;border-radius:var(--radius-sm);padding:14px;font-family:var(--mono);font-size:12px;color:#c5c4be;line-height:1.8">
+<span style="color:#8fa4ff">@track_mcp_tool</span>("calculate_org_air_score")<br>
+<span style="color:#7a7972"># Wraps MCP tool calls → Counter + Histogram</span><br><br>
+<span style="color:#8fa4ff">@track_agent</span>("sec_analyst")<br>
+<span style="color:#7a7972"># Wraps agent invocations → Counter + Histogram</span><br><br>
+<span style="color:#8fa4ff">@track_cs_client</span>("cs3", "get_assessment")<br>
+<span style="color:#7a7972"># Wraps CS client calls → Counter (service+endpoint+status)</span>
+</div></div>
+</div>
+
+</div>
+</div>
+
+<script>
+function showPage(id,el){
+document.querySelectorAll('.page-section').forEach(function(p){p.style.display='none'});
+document.getElementById('page-'+id).style.display='block';
+document.querySelectorAll('.nav-item').forEach(function(n){n.classList.remove('active')});
+if(el)el.classList.add('active');
+}
+document.querySelectorAll('.tabs .tab').forEach(function(t){
+t.addEventListener('click',function(){
+this.parentElement.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active')});
+this.classList.add('active');
+});
+});
+</script>
+</body>
+</html>
+
